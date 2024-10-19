@@ -27,3 +27,6 @@ data/processed/*
 
 data/raw/*
 !data/raw/.keep
+
+results/*
+!results/.keep
