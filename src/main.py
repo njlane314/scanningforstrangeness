@@ -2,17 +2,27 @@ import torch
 import os
 import argparse
 from tqdm import tqdm
-from model import UNet
-from data import SegmentationBunch
-from network import set_seed, create_model, get_class_weights, load_model_only, accuracy, save_model
+from models.model import UNet
+from models.segmentation_dataset import SegmentationDataLoader
+from utils import set_seed, create_model, get_class_weights, load_model_only, accuracy, save_model
 
 def train_model(args):
-    torch.set_default_tensor_type(torch.cuda.FloatTensor)
-    device = torch.device('cuda:0')
+    if torch.cuda.is_available():
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
+        device = torch.device('cuda:0')
+    else:
+        torch.set_default_tensor_type(torch.FloatTensor)
+        device = torch.device('cpu')
+
+    model_dir = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/"
+    os.makedirs(model_dir, exist_ok=True)
+
     set_seed(args.seed)
-    bunch = SegmentationBunch(args.image_path, "Hits", "Truth", batch_size=args.batch_size, valid_pct=0.25, device=device)
+
+    bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
     train_stats = bunch.count_classes(args.num_classes)
     weights = get_class_weights(train_stats)
+
     train_losses = torch.zeros(args.n_epochs * len(bunch.train_dl), device=device)
     val_losses = torch.zeros(args.n_epochs, device=device)
     train_accs = torch.zeros(args.n_epochs * len(bunch.train_dl), device=device)

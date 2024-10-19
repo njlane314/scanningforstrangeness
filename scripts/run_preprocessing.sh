@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source config_env.sh
+source scripts/config_env.sh
 
 if [ ! -d "$PROCESSED_DIR" ]; then
     mkdir -p "$PROCESSED_DIR"

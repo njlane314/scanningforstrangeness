@@ -5,6 +5,10 @@ import numpy as np
 
 
 def create_histograms(x, z, adc, flags, x_bounds, z_bounds, image_size, view):
+    if len(x) != len(z) or len(x) != len(adc):
+        print(f"Error: Mismatched lengths: x({len(x)}), z({len(z)}), adc({len(adc)})")
+        return None, None
+    
     image_height, image_width = image_size
     x_min, x_max = x_bounds
     z_min, z_max = z_bounds
@@ -33,29 +37,44 @@ def create_histograms(x, z, adc, flags, x_bounds, z_bounds, image_size, view):
 
 def parse_data(data):
     try:
+        if data[-1] == '1':
+            data = data[:-1] 
+
         n_hits = int(data[0])
         n_flags = int(data[1])
 
+        print(f"Number of hits: {n_hits}, Number of flags: {n_flags}")
+
         x_vtx = float(data[2])
         z_vtx = float(data[3])
+        print(f"Vertex: x = {x_vtx}, z = {z_vtx}")
+
         evt_drift_min, evt_drift_max = float(data[4]), float(data[5])
         evt_wire_min, evt_wire_max = float(data[6]), float(data[7])
         intr_drift_min, intr_drift_max = float(data[8]), float(data[9])
         intr_wire_min, intr_wire_max = float(data[10]), float(data[11])
 
+        print(f"Event extent: drift_min = {evt_drift_min}, drift_max = {evt_drift_max}, wire_min = {evt_wire_min}, wire_max = {evt_wire_max}")
+        print(f"Interaction extent: drift_min = {intr_drift_min}, drift_max = {intr_drift_max}, wire_min = {intr_wire_min}, wire_max = {intr_wire_max}")
+
         hit_data_start_index = 12
         hit_data = data[hit_data_start_index:]
 
-        if len(hit_data) < n_hits * (3 + n_flags):
+        expected_length = n_hits * (3 + n_flags)
+        print(f"Hit data length: {len(hit_data)}, Expected length: {expected_length}")
+
+        if len(hit_data) < expected_length:
             raise ValueError("Inconsistent hit data length")
 
         hit_x = np.array(hit_data[0::(3 + n_flags)], dtype=float)
         hit_z = np.array(hit_data[1::(3 + n_flags)], dtype=float)
         hit_adc = np.array(hit_data[2::(3 + n_flags)], dtype=float)
 
+        print(f"Parsed hit data: x = {hit_x[:5]}, z = {hit_z[:5]}, adc = {hit_adc[:5]}")  
         hit_flags = []
         for i in range(n_flags):
             hit_flags.append(np.array(hit_data[(3 + i)::(3 + n_flags)], dtype=float))
+            print(f"Flag {i} data: {hit_flags[i][:5]}") 
 
         return (x_vtx, z_vtx, evt_drift_min, evt_drift_max, evt_wire_min, evt_wire_max,
                 intr_drift_min, intr_drift_max, intr_wire_min, intr_wire_max), (hit_x, hit_z, hit_adc, np.vstack(hit_flags).T)
@@ -65,8 +84,9 @@ def parse_data(data):
         return None, None
 
 
-def process_event(data, output_folder, event_number, view, image_size, n_flags):
-    metadata, hit_data = parse_data(data, n_flags)
+
+def process_event(data, output_folder, event_number, view, image_size):
+    metadata, hit_data = parse_data(data)
     if metadata is None or hit_data is None:
         print(f"Skipping event {event_number} due to data parsing issues.")
         return

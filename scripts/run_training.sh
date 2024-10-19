@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source config_env.sh
+source scripts/config_env.sh
 
 for subdir in models stats images; do
     dir="${OUTPUT_DIR}/${subdir}/pass${VERTEX_PASS}/${VIEW}"
@@ -11,7 +11,7 @@ done
 
 echo -e "${BLUE}-- Running training with IMAGE_PATH=$IMAGE_PATH and OUTPUT_DIR=$OUTPUT_DIR${NC}"
 
-python3 scripts/main.py \
+python3 src/main.py \
     --image_path "$IMAGE_PATH" \
     --batch_size "$BATCH_SIZE" \
     --num_classes "$NUM_CLASSES" \

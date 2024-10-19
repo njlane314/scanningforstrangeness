@@ -54,12 +54,24 @@ class SegmentationData(Dataset):
 
 
 class SegmentationDataLoader():
-    def __init__(self, root_dir, image_dir, mask_dir, batch_size, train_pct=None, valid_pct=0.1,
+    def __init__(self, root_dir, view, batch_size, train_pct=None, valid_pct=0.1,
                  test_pct=0.0, transform=False, device=torch.device('cuda:0')):
         assert (valid_pct + test_pct) < 1.0
-        image_dir = os.path.join(root_dir, image_dir)
-        mask_dir = os.path.join(root_dir, mask_dir)
+
+        image_dir = os.path.join(root_dir, f"images_{view}/input")
+        mask_dir = os.path.join(root_dir, f"images_{view}/target")
+
+        if not os.path.exists(image_dir):
+            raise FileNotFoundError(f"Directory not found: {image_dir}")
+        if not os.path.exists(mask_dir):
+            raise FileNotFoundError(f"Directory not found: {mask_dir}")
+
         image_filenames = np.array(next(os.walk(image_dir))[2])
+        if len(image_filenames) == 0:
+            raise FileNotFoundError(f"No image files found in directory: {image_dir}")
+        else:
+            print(f"Found {len(image_filenames)} image files in {image_dir}")
+
         n_files = len(image_filenames)
         valid_size = int(n_files * valid_pct)
         train_size = n_files - valid_size if train_pct is None else int(n_files * train_pct)

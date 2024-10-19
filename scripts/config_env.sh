@@ -18,12 +18,22 @@ if [ "$ENVIRONMENT" = "cluster" ]; then
     echo -e "${BLUE}-- Setting up paths for cluster environment...${NC}"
     export RAW_DIR="$CURRENT_DIR/data/raw"
     export PROCESSED_DIR="$CURRENT_DIR/data/processed"
-    export IMAGE_PATH="$CURRENT_DIR/images"
-    export OUTPUT_DIR="$CURRENT_DIR/outputs"
+    export IMAGE_PATH="$CURRENT_DIR/data/processed"
+    export OUTPUT_DIR="$CURRENT_DIR/results"
 else
     echo -e "${YELLOW}-- Setting up paths for local environment...${NC}"
     export RAW_DIR="$CURRENT_DIR/data/raw"
     export PROCESSED_DIR="$CURRENT_DIR/data/processed"
-    export IMAGE_PATH="$CURRENT_DIR/images"
-    export OUTPUT_DIR="$CURRENT_DIR/outputs"
+    export IMAGE_PATH="$CURRENT_DIR/data/processed"
+    export OUTPUT_DIR="$CURRENT_DIR/results"
 fi
+
+export IMAGE_SIZE="256 256" 
+export FILE_PREFIX="training_output_"
+BATCH_SIZE=32
+NUM_CLASSES=4
+N_EPOCHS=50
+MODEL_NAME="model"
+VIEW="U"
+VERTEX_PASS=1
+SEED=12345
