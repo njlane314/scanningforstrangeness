@@ -7,16 +7,10 @@ from models.segmentation_dataset import SegmentationDataLoader
 from utils import set_seed, create_model, get_class_weights, load_model_only, accuracy, save_model
 
 def train_model(args):
-    if torch.cuda.is_available():
-        torch.set_default_tensor_type(torch.cuda.FloatTensor)
-        device = torch.device('cuda:0')
-    else:
-        torch.set_default_tensor_type(torch.FloatTensor)
-        device = torch.device('cpu')
+    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
 
-    model_dir = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/"
-    os.makedirs(model_dir, exist_ok=True)
-
+    os.makedirs(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/", exist_ok=True)
     set_seed(args.seed)
 
     bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
@@ -28,11 +22,11 @@ def train_model(args):
     train_accs = torch.zeros(args.n_epochs * len(bunch.train_dl), device=device)
     val_accs = torch.zeros(args.n_epochs, device=device)
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
-    i = 0
 
+    i = 0
     for e in tqdm(range(args.n_epochs), desc="Training"):
         model.train()
-        for b, batch in enumerate(bunch.train_dl):
+        for batch in bunch.train_dl:
             x, y = batch
             pred = model(x)
             loss = loss_fn(pred, y)
@@ -58,23 +52,21 @@ def train_model(args):
     torch.set_default_tensor_type(torch.FloatTensor)
 
 def trace_and_save_model(args):
-    torch.set_default_tensor_type(torch.FloatTensor)
-    device = torch.device('cpu')
-    model = load_model_only(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_19.pkl", args.num_classes, device)
+    model = load_model_only(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_19.pkl", args.num_classes, torch.device('cpu'))
     sm = torch.jit.script(model)
     sm.save(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/UB_ProngFinder_{args.vertex_pass}_{args.view}.pt")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="U-Net Vertex Finder Training")
-    parser.add_argument("--image_path", type=str, required=True)
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--num_classes", type=int, default=4)
-    parser.add_argument("--n_epochs", type=int, default=20)
-    parser.add_argument("--model_name", type=str, required=True)
-    parser.add_argument("--view", type=str, default="U")
-    parser.add_argument("--vertex_pass", type=int, default=1)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--output_dir", type=str, default="outputs")
+    parser.add_argument("-i", "--image_path", type=str, required=True)
+    parser.add_argument("-b", "--batch_size", type=int, default=32)
+    parser.add_argument("-n", "--num_classes", type=int, default=4)
+    parser.add_argument("-e", "--n_epochs", type=int, default=20)
+    parser.add_argument("-m", "--model_name", type=str, required=True)
+    parser.add_argument("-v", "--view", type=str, default="U")
+    parser.add_argument("-p", "--vertex_pass", type=int, default=1)
+    parser.add_argument("-s", "--seed", type=int, default=42)
+    parser.add_argument("-o", "--output_dir", type=str, default="outputs")
     args = parser.parse_args()
     train_model(args)
     trace_and_save_model(args)

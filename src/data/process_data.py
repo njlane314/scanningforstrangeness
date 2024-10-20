@@ -3,7 +3,6 @@ import csv
 import argparse
 import numpy as np
 
-
 def create_histograms(x, z, adc, flags, x_bounds, z_bounds, image_size, view):
     if len(x) != len(z) or len(x) != len(adc):
         print(f"Error: Mismatched lengths: x({len(x)}), z({len(z)}), adc({len(adc)})")
@@ -123,10 +122,10 @@ def process_file(input_file, output_folder, view, image_size):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--raw_dir', type=str, required=True)
-    parser.add_argument('--processed_dir', type=str, required=True)
-    parser.add_argument('--file_prefix', type=str, default="training_output_")
-    parser.add_argument('--image_size', type=int, nargs=2, default=[256, 256])
+    parser.add_argument('-r', '--raw_dir', type=str, required=True)
+    parser.add_argument('-p', '--processed_dir', type=str, required=True)
+    parser.add_argument('-f', '--file_prefix', type=str, default="training_output_")
+    parser.add_argument('-s', '--image_size', type=int, nargs=2, default=[256, 256])
     
     args = parser.parse_args()
 
