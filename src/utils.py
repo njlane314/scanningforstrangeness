@@ -1,6 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import torch.optim as opt
+import torch.nn as nn
+from model import UNet
 
 def set_seed(seed):
     torch.backends.cudnn.deterministic = True

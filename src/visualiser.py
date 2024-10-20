@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm, LogNorm
 
-def visualise_input(input_histogram, event_number):
+def visualise_input(input_histogram, event_number, output_dir):
     input_histogram[input_histogram < 1e3] = 1e3
     plt.figure(figsize=(8, 6))
     plt.imshow(input_histogram, cmap='jet', norm=LogNorm(vmin=1e3), aspect='equal', interpolation='none')
@@ -12,11 +12,11 @@ def visualise_input(input_histogram, event_number):
     plt.xlabel("Drift")
     plt.ylabel("Wire")
     plt.tight_layout()
-    output_file = os.path.join("results", "plots", "input", f"input_event_{event_number}.png")
+    output_file = os.path.join(output_dir, "input", f"input_event_{event_number}.png")
     plt.savefig(output_file, dpi=300)
     plt.close()
 
-def visualise_truth(target_histogram, event_number):
+def visualise_truth(target_histogram, event_number, output_dir):
     cmap = ListedColormap(['white', 'red', 'blue', 'cyan', 'green', 'yellow', 'purple'])
     bounds = np.arange(0, target_histogram.max() + 2)
     norm = BoundaryNorm(bounds, cmap.N)
@@ -26,7 +26,7 @@ def visualise_truth(target_histogram, event_number):
     plt.xlabel("Drift")
     plt.ylabel("Wire")
     plt.tight_layout()
-    output_file = os.path.join("results", "plots", "target", f"target_event_{event_number}.png")
+    output_file = os.path.join(output_dir, "target", f"target_event_{event_number}.png")
     plt.savefig(output_file, dpi=300)
     plt.close()
 
@@ -40,11 +40,11 @@ def load_histograms(input_folder, event_number):
     target_histogram = np.load(target_file)['arr_0']
     return input_histogram, target_histogram
 
-def visualise_event(input_folder, event_number):
+def visualise_event(input_folder, event_number, output_dir):
     input_histogram, target_histogram = load_histograms(input_folder, event_number)
     if input_histogram is not None and target_histogram is not None:
-        visualise_input(input_histogram, event_number)
-        visualise_truth(target_histogram, event_number)
+        visualise_input(input_histogram, event_number, output_dir)
+        visualise_truth(target_histogram, event_number, output_dir)
     else:
         print(f"Skipping visualisation for event {event_number}")
 
@@ -54,10 +54,11 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--proc', type=str, required=True)
     parser.add_argument('-v', '--view', type=str, default="u", choices=["u", "v", "w"])
     parser.add_argument('-e', '--event', type=int, required=True)
+    parser.add_argument('-o', '--output_dir', type=str, default="output")
     args = parser.parse_args()
 
-    os.makedirs("results/plots/input", exist_ok=True)
-    os.makedirs("results/plots/target", exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "input"), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, "target"), exist_ok=True)
 
     input_folder = os.path.join(args.proc, f"images_{args.view}")
-    visualise_event(input_folder, args.event)
+    visualise_event(input_folder, args.event, args.output_dir)

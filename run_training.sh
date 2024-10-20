@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source scripts/config_env.sh
-
 for subdir in models stats images; do
     dir="${OUTPUT_DIR}/${subdir}/pass${VERTEX_PASS}/${VIEW}"
     [ ! -d "$dir" ] && mkdir -p "$dir"

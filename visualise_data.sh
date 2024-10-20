@@ -1,7 +1,5 @@
 #!/bin/bash
 
-source scripts/config_env.sh
-
 if [ "$#" -lt 2 ]; then
     echo -e "${RED}Usage: $0 <view> <event_number> | --all${NC}"
     exit 1
