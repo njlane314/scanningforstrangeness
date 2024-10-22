@@ -101,6 +101,49 @@ def create_model(num_classes, weights, device):
     
     return model, loss_fn, optim
 
+def visualise_predictions(model, loader, device, output_dir, num_samples=3):
+    model.eval()
+    samples = 0
+    with torch.no_grad():
+        for batch in loader:
+            x, y = batch
+            x, y = x.to(device), y.to(device)
+
+            preds = model(x).argmax(dim=1)
+
+            x = x.cpu()
+            y = y.cpu()
+            preds = preds.cpu()
+
+            for i in range(min(num_samples, x.size(0))):
+                input_img = x[i].squeeze(0)
+                ground_truth = y[i]
+                prediction = preds[i]
+
+                fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+
+                ax[0].imshow(input_img, cmap='gray')
+                ax[0].set_title('Input Image')
+                ax[0].axis('off')
+
+                ax[1].imshow(ground_truth, cmap='jet', vmin=0, vmax=loader.dataset.num_classes - 1)
+                ax[1].set_title('Ground Truth')
+                ax[1].axis('off')
+
+                ax[2].imshow(prediction, cmap='jet', vmin=0, vmax=loader.dataset.num_classes - 1)
+                ax[2].set_title('Prediction')
+                ax[2].axis('off')
+
+                plt.tight_layout()
+                plt.savefig(f"{output_dir}/prediction_sample_{samples}.png")
+                plt.close()
+
+                samples += 1
+
+            if samples >= num_samples:
+                break
+
+
 
 def plot_loss_accuracy(train_losses, val_losses,
                        train_accs, val_accs,

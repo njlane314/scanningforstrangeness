@@ -3,7 +3,7 @@ import os
 import argparse
 from tqdm import tqdm
 from dataset import SegmentationDataLoader
-from utils import set_seed, create_model, get_class_weights, load_model, save_model, plot_loss
+from utils import set_seed, create_model, get_class_weights, load_model, save_model, plot_loss, visualise_predictions
 import numpy as np
 
 def train_model(args):
@@ -81,6 +81,8 @@ def train_model(args):
                 metrics['valid_losses'].append(val_loss.item())
                 print(f"[Step {valid_step}] Val Loss: {val_loss.item():.4f}")
                 valid_step += 1
+
+        visualise_predictions(model, bunch.valid_dl, device, args.output_dir, num_samples=3)
 
     return model, metrics
 
