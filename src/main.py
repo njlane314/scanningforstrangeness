@@ -14,7 +14,7 @@ def train_model(args):
 
     set_seed(args.seed)
 
-    bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
+    bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.5, device=device)
     max_value = bunch.find_max_value()
     bunch.apply_normalization(max_value)
 
@@ -33,7 +33,8 @@ def train_model(args):
         'valid_losses': []
     }
 
-    step = 0  
+    train_step = 0 
+    valid_step = 0 
     for e in tqdm(range(args.n_epochs), desc="Training"):
         model.train()
         for batch in bunch.train_dl:
@@ -53,7 +54,7 @@ def train_model(args):
             loss = loss_fn(pred, y)
 
             loss.backward()
-            optim.step()
+            optim.train_step()
 
             #for name, param in model.named_parameters():
             #    if param.grad is None:
@@ -62,8 +63,8 @@ def train_model(args):
             #        print(f"Parameter {name} has gradient mean: {param.grad.mean().item()}")
 
             metrics['train_losses'].append(loss.item())
-            print(f"[Step {step}] Train Loss: {loss.item():.4f}")
-            step += 1 
+            print(f"[Step {train_step}] Train Loss: {loss.item():.4f}")
+            train_step += 1 
 
         model.eval()
         with torch.no_grad():
@@ -78,7 +79,8 @@ def train_model(args):
                 val_loss = loss_fn(pred, y)
 
                 metrics['valid_losses'].append(val_loss.item())
-                print(f"[Step {step}] Val Loss: {val_loss.item():.4f}")
+                print(f"[Step {valid_step}] Val Loss: {val_loss.item():.4f}")
+                valid_step += 1
 
     return model, metrics
 
