@@ -9,28 +9,26 @@ NC='\033[0m'
 CURRENT_DIR=$(pwd)
 CURRENT_USER=$(whoami)
 
+export NUM_EVENTS=10000
+export IMAGE_SIZE="256 256"
+export FILE_PREFIX="training_output_"
+export BATCH_SIZE=32
+export NUM_CLASSES=4
+export N_EPOCHS=50
+export MODEL_NAME="model"
+export VIEW="U"
+export VERTEX_PASS=1
+export SEED=12345
+
 setup_environment() {
     case $1 in
         default)
-            echo -e "${YELLOW}-- Setting up default environment...${NC}"
-            export RAW_DIR="$CURRENT_DIR/data/raw"
-            export PROCESSED_DIR="$CURRENT_DIR/data/processed"
-            export IMAGE_PATH="$CURRENT_DIR/data/processed"
-            export OUTPUT_DIR="$CURRENT_DIR/output"
-            export IMAGE_SIZE="256 256"
-            export FILE_PREFIX="training_output_"
-            BATCH_SIZE=32
-            NUM_CLASSES=4
-            N_EPOCHS=50
-            MODEL_NAME="model"
-            VIEW="U"
-            VERTEX_PASS=1
-            SEED=12345
-            ;;
-        custom_case)
-            echo -e "${BLUE}-- Setting up custom_case environment...${NC}"
-            setup_environment default
-            ;;
+            echo -e "${BLUE}-- Setting up default environment...${NC}"
+            export DATA_DIR="/gluster/data/dune/cthorpe/kaon_dl"
+            export RAW_DIR="$DATA_DIR/make_k0signal_overlay_testing_reco2_reco2"
+            export PROCESSED_DIR="$DATA_DIR/processed"
+            export OUTPUT_DIR="$DATA_DIR"
+        ;;
         *)
             echo -e "${RED}-- No matching case found. Falling back to default environment...${NC}"
             setup_environment default
@@ -40,19 +38,16 @@ setup_environment() {
 
 setup_user() {
     case $CURRENT_USER in
-        r22473nl)
+        niclane)
             echo -e "${GREEN}-- Setting up user environment for nlane...${NC}"
             export USERNAME="nlane"
             export SERVER="uboonegpvm04.fnal.gov"
             export REMOTE_DIR="/exp/uboone/app/users/nlane/production/KaonShortProduction04/srcs/ubana/ubana/searchingforstrangeness/"
-            export LOCAL_DIR="$CURRENT_DIR/data/raw"
-            ;;
-        custom_user)
-            echo -e "${BLUE}-- Setting up user environment for custom_user...${NC}"
+            export LOCAL_DIR="$DATA_DIR"
             ;;
         *)
             echo -e "${RED}-- No matching user found. Falling back to default user configuration...${NC}"
-            setup_environment r22473nl
+            setup_environment niclane
             ;;
     esac
 }
@@ -63,7 +58,6 @@ setup_user
 echo -e "${BLUE}-- Environment configuration:${NC}"
 echo "RAW_DIR: $RAW_DIR"
 echo "PROCESSED_DIR: $PROCESSED_DIR"
-echo "IMAGE_PATH: $IMAGE_PATH"
 echo "OUTPUT_DIR: $OUTPUT_DIR"
 echo "IMAGE_SIZE: $IMAGE_SIZE"
 echo "FILE_PREFIX: $FILE_PREFIX"

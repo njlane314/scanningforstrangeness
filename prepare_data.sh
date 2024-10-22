@@ -8,7 +8,8 @@ python3 src/imager.py \
     -r "$RAW_DIR" \
     -p "$PROCESSED_DIR" \
     -f "$FILE_PREFIX" \
-    -s $IMAGE_SIZE
+    -s $IMAGE_SIZE \
+    -n $NUM_EVENTS
 
 [ $? -eq 0 ] && echo -e "${GREEN}-- Preprocessing completed successfully.${NC}" || (echo -e "${RED}-- Preprocessing failed.${NC}" && exit 1)
 

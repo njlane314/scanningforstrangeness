@@ -5,10 +5,10 @@ for subdir in models stats images; do
     [ ! -d "$dir" ] && mkdir -p "$dir"
 done
 
-echo -e "${BLUE}-- Running training with IMAGE_PATH=$IMAGE_PATH and OUTPUT_DIR=$OUTPUT_DIR${NC}"
+echo -e "${BLUE}-- Running training with PROCESSED_DIR=$PROCESSED_DIR and OUTPUT_DIR=$OUTPUT_DIR${NC}"
 
 python3 src/main.py \
-    -i "$IMAGE_PATH" \
+    -i "$PROCESSED_DIR" \
     -b "$BATCH_SIZE" \
     -n "$NUM_CLASSES" \
     -e "$N_EPOCHS" \

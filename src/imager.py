@@ -113,10 +113,12 @@ def process_event(data, output_folder, event_number, view, image_size):
     print(f"Event {event_number}: Saved histograms to {input_filename} and {target_filename}")
 
 
-def process_file(input_file, output_folder, view, image_size):
+def process_file(input_file, output_folder, view, image_size, num_events=None):
     with open(input_file, 'r') as f:
         reader = csv.reader(f)
         for event_number, row in enumerate(reader):
+            if num_events is not None and event_number >= num_events:
+                break 
             process_event(row, output_folder, event_number, view, image_size)
 
 
@@ -126,7 +128,8 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--processed_dir', type=str, required=True)
     parser.add_argument('-f', '--file_prefix', type=str, default="training_output_")
     parser.add_argument('-s', '--image_size', type=int, nargs=2, default=[256, 256])
-    
+    parser.add_argument('-n', '--num_events', type=int, default=None)
+
     args = parser.parse_args()
 
     for view in ["u", "v", "w"]:
@@ -134,4 +137,5 @@ if __name__ == "__main__":
         output_folder = os.path.join(args.processed_dir, f"images_{view}")
         os.makedirs(output_folder, exist_ok=True)
 
-        process_file(input_file, output_folder, view, image_size=tuple(args.image_size))
+        process_file(input_file, output_folder, view, image_size=tuple(args.image_size), num_events=args.num_events)
+
