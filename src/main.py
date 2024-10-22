@@ -3,7 +3,7 @@ import os
 import argparse
 from tqdm import tqdm
 from dataset import SegmentationDataLoader
-from utils import set_seed, create_model, get_class_weights, load_model, accuracy, save_model, dice_coefficient, intersection_over_union
+from utils import set_seed, create_model, get_class_weights, load_model, save_model
 import numpy as np
 
 def train_model(args):
@@ -21,14 +21,12 @@ def train_model(args):
     model = model.to(device)
 
     metrics = {
-        'train_losses': [], 'val_losses': [],
-        'train_accs': [], 'val_accs': [],
-        'train_dice_scores': [], 'val_dice_scores': [],
-        'train_iou_scores': [], 'val_iou_scores': []
+        'train_losses': [], 
+        'valid_losses': []
     }
 
-    best_val_loss = float('inf')
-    best_val_model = None
+    #best_val_loss = float('inf')
+    #best_val_model = None
 
     set_seed(args.seed)
     step = 0 
@@ -47,13 +45,9 @@ def train_model(args):
             loss.backward()
             optim.step()
 
-            pred_classes = torch.argmax(pred, dim=1) 
             metrics['train_losses'].append(loss.item())
-            metrics['train_accs'].append(accuracy(pred_classes, y).cpu().numpy())
-            metrics['train_dice_scores'].append(dice_coefficient(pred_classes, y).cpu().numpy())
-            metrics['train_iou_scores'].append(intersection_over_union(pred_classes, y).cpu().numpy())
 
-            print(f"[Step {step}] Train Loss: {loss.item():.4f}, Accuracy: {metrics['train_accs'][-1]:.4f}, Dice: {metrics['train_dice_scores'][-1]:.4f}, IoU: {metrics['train_iou_scores'][-1]:.4f}")
+            print(f"[Step {step}] Train Loss: {loss.item():.4f}")
             step += 1 
 
         model.eval()
@@ -65,29 +59,16 @@ def train_model(args):
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
 
-                pred_classes = torch.argmax(pred, dim=1)
+                metrics['valid_losses'].append(val_loss.item())
 
-                metrics['val_losses'].append(val_loss.item())
-                metrics['val_accs'].append(accuracy(pred_classes, y).cpu().numpy())
-                metrics['val_dice_scores'].append(dice_coefficient(pred_classes, y).cpu().numpy())
-                metrics['val_iou_scores'].append(intersection_over_union(pred_classes, y).cpu().numpy())
+                print(f"[Step {step}] Val Loss: {val_loss.item():.4f}")
 
-                print(f"[Step {step}] Val Loss: {val_loss.item():.4f}, Accuracy: {metrics['val_accs'][-1]:.4f}, Dice: {metrics['val_dice_scores'][-1]:.4f}, IoU: {metrics['val_iou_scores'][-1]:.4f}")
-
-        current_val_loss = np.mean(metrics['val_losses'][-len(bunch.valid_dl):])  
-        if current_val_loss < best_val_loss:
-            best_val_loss = current_val_loss
-            best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best"
-            print(f"Saving model to: {best_val_model}.pt")
-            save_model(model, x, best_val_model)
-
-    # plot_loss_accuracy(
-    #     metrics['train_losses'], metrics['val_losses'], 
-    #     metrics['train_accs'], metrics['val_accs'], 
-    #     metrics['train_dice_scores'], metrics['val_dice_scores'], 
-    #     metrics['train_iou_scores'], metrics['val_iou_scores'], 
-    #     step, args.output_dir
-    # )
+        #current_val_loss = np.mean(metrics['valid_losses'][-len(bunch.valid_dl):])  
+        #if current_val_loss < best_val_loss:
+        #    best_val_loss = current_val_loss
+        #    best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best"
+        #    print(f"Saving model to: {best_val_model}.pt")
+        #    save_model(model, x, best_val_model)
 
 def trace_model(args, best_val_model):
     device = torch.device('cpu')
