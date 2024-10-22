@@ -32,8 +32,8 @@ class SegmentationData(Dataset):
         with open(mask_name, 'rb') as file:
             mask = np.load(file)['arr_0']
 
-        image = torch.as_tensor(np.expand_dims(image, axis=0), device=self.device, dtype=torch.float)
-        mask = torch.as_tensor(mask, device=self.device, dtype=torch.long)
+        image = torch.as_tensor(np.expand_dims(image, axis=0), dtype=torch.float).to(self.device)
+        mask = torch.as_tensor(mask, dtype=torch.long).to(self.device)
 
         if self.transform:
             should_hflip = torch.rand(1) > 0.5

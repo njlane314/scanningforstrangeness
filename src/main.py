@@ -7,8 +7,7 @@ from utils import set_seed, create_model, get_class_weights, load_model, accurac
 
 def train_model(args):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-    torch.set_default_tensor_type(torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor)
-
+    
     os.makedirs(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/", exist_ok=True)
     set_seed(args.seed)
 
@@ -20,8 +19,7 @@ def train_model(args):
     val_losses = torch.zeros(args.n_epochs, device=device)
     train_accs = torch.zeros(args.n_epochs * len(bunch.train_dl), device=device)
     val_accs = torch.zeros(args.n_epochs, device=device)
-    iou_scores = []
-    dice_scores = []
+
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
 
     best_val_loss = float('inf')
@@ -33,6 +31,7 @@ def train_model(args):
         model.train()
         for batch in bunch.train_dl:
             x, y = batch
+            x, y = x.to(device), y.to(device)  
             pred = model(x)
             loss = loss_fn(pred, y)
             train_losses[i] = loss.item()
@@ -45,15 +44,14 @@ def train_model(args):
         model.eval()
         with torch.no_grad():
             val_loss, val_acc = [], []
-            iou_epoch, dice_epoch = [], []
             for x, y in bunch.valid_dl:
+                x, y = x.to(device), y.to(device)  
                 pred = model(x)
                 val_loss.append(loss_fn(pred, y).item())
                 val_acc.append(accuracy(pred, y))
-            avg_val_loss = torch.mean(torch.tensor(val_loss))
-
+            avg_val_loss = torch.mean(torch.tensor(val_loss, device=device))
             val_losses[e] = avg_val_loss
-            val_accs[e] = torch.mean(torch.tensor(val_acc))
+            val_accs[e] = torch.mean(torch.tensor(val_acc, device=device))
 
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
@@ -61,10 +59,9 @@ def train_model(args):
                 save_model(model, x, best_val_model)
 
     plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, args.n_epochs, args.output_dir)
-    plot_class_performance(iou_scores, dice_scores, class_names, args.n_epochs, args.output_dir)
-
-    torch.set_default_tensor_type(torch.FloatTensor)
+    
     return best_val_model
+
 
 def trace_model(args, best_val_model):
     device = torch.device('cpu')  
