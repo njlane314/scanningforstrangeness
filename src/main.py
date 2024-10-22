@@ -58,9 +58,9 @@ def train_model(args):
             scaler.update()  
 
             batch_train_losses.append(loss.item())
-            batch_train_accs.append(accuracy(pred, y))
-            batch_train_dice.append(dice_coefficient(pred, y))
-            batch_train_iou.append(intersection_over_union(pred, y))
+            batch_train_accs.append(accuracy(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
+            batch_train_dice.append(dice_coefficient(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
+            batch_train_iou.append(intersection_over_union(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
             num_batches += 1
 
         train_losses.append(np.mean(batch_train_losses))
@@ -83,9 +83,9 @@ def train_model(args):
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
                 batch_val_losses.append(val_loss.item())
-                batch_val_accs.append(accuracy(pred, y))
-                batch_val_dice.append(dice_coefficient(pred, y))
-                batch_val_iou.append(intersection_over_union(pred, y))
+                batch_val_accs.append(accuracy(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
+                batch_val_dice.append(dice_coefficient(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
+                batch_val_iou.append(intersection_over_union(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
                 num_val_batches += 1
 
         val_losses.append(np.mean(batch_val_losses))
