@@ -4,6 +4,9 @@ import argparse
 import numpy as np
 
 def create_histograms(x, z, adc, flags, x_bounds, z_bounds, image_size, view):
+    print(f"Creating histograms for view {view}.")
+    print(f"x_bounds: {x_bounds}, z_bounds: {z_bounds}, image_size: {image_size}")
+    
     if len(x) != len(z) or len(x) != len(adc):
         print(f"Error: Mismatched lengths: x({len(x)}), z({len(z)}), adc({len(adc)})")
         return None, None
@@ -14,6 +17,8 @@ def create_histograms(x, z, adc, flags, x_bounds, z_bounds, image_size, view):
 
     z_bins = np.linspace(z_min - 0.5, z_max + 0.5, image_height + 1)
     x_bins = np.linspace(x_min - 0.5, x_max + 0.5, image_width + 1)
+
+    print(f"Bins created: x_bins = {len(x_bins)}, z_bins = {len(z_bins)}")
 
     input_histogram, _, _ = np.histogram2d(z, x, bins=[z_bins, x_bins], weights=adc)
     input_histogram = input_histogram.astype(float)
@@ -31,16 +36,20 @@ def create_histograms(x, z, adc, flags, x_bounds, z_bounds, image_size, view):
 
         target_histogram[z_idx, x_idx] = particle_class
 
+    print(f"Histograms created for event.")
     return input_histogram, target_histogram
 
 
 def parse_data(data):
     try:
+        print(f"Parsing data: {data[:10]}...") 
         if data[-1] == '1':
             data = data[:-1] 
 
         n_hits = int(data[0])
         n_flags = int(data[1])
+
+        print(f"n_hits: {n_hits}, n_flags: {n_flags}")
 
         x_vtx = float(data[2])
         z_vtx = float(data[3])
@@ -50,10 +59,15 @@ def parse_data(data):
         intr_drift_min, intr_drift_max = float(data[8]), float(data[9])
         intr_wire_min, intr_wire_max = float(data[10]), float(data[11])
 
+        print(f"Event vertex: x = {x_vtx}, z = {z_vtx}")
+        print(f"Event extents: drift({evt_drift_min}, {evt_drift_max}), wire({evt_wire_min}, {evt_wire_max})")
+        print(f"Interaction extents: drift({intr_drift_min}, {intr_drift_max}), wire({intr_wire_min}, {intr_wire_max})")
+
         hit_data_start_index = 12
         hit_data = data[hit_data_start_index:]
 
         expected_length = n_hits * (3 + n_flags)
+        print(f"Expected hit data length: {expected_length}, Actual length: {len(hit_data)}")
 
         if len(hit_data) < expected_length:
             raise ValueError("Inconsistent hit data length")
@@ -62,9 +76,12 @@ def parse_data(data):
         hit_z = np.array(hit_data[1::(3 + n_flags)], dtype=float)
         hit_adc = np.array(hit_data[2::(3 + n_flags)], dtype=float)
 
+        print(f"Hit x sample: {hit_x[:5]}, z sample: {hit_z[:5]}, adc sample: {hit_adc[:5]}") 
+
         hit_flags = []
         for i in range(n_flags):
             hit_flags.append(np.array(hit_data[(3 + i)::(3 + n_flags)], dtype=float))
+            print(f"Flag {i} data sample: {hit_flags[i][:5]}") 
 
         return (x_vtx, z_vtx, evt_drift_min, evt_drift_max, evt_wire_min, evt_wire_max,
                 intr_drift_min, intr_drift_max, intr_wire_min, intr_wire_max), (hit_x, hit_z, hit_adc, np.vstack(hit_flags).T)
@@ -75,10 +92,13 @@ def parse_data(data):
 
 
 def process_event(data, output_folder, event_number, view, image_size):
+    print(f"Processing event {event_number}, view {view}.")
     metadata, hit_data = parse_data(data)
     if metadata is None or hit_data is None:
         print(f"Skipping event {event_number} due to data parsing issues.")
         return
+
+    print(f"Parsed metadata and hit data for event {event_number}.")
 
     (x_vtx, z_vtx, evt_drift_min, evt_drift_max, evt_wire_min, evt_wire_max,
      intr_drift_min, intr_drift_max, intr_wire_min, intr_wire_max), (hit_x, hit_z, hit_adc, hit_flags) = metadata, hit_data
@@ -104,19 +124,19 @@ def process_event(data, output_folder, event_number, view, image_size):
 
 
 def process_file(input_file, output_folder, view, image_size, num_events=None):
+    print(f"Processing file: {input_file}")
     with open(input_file, 'r') as f:
         reader = csv.reader(f)
-        total_events = sum(1 for row in reader)
-        f.seek(0) 
         for event_number, row in enumerate(reader):
             if num_events is not None and event_number >= num_events:
                 break 
+            print(f"Processing event {event_number + 1}")
             process_event(row, output_folder, event_number, view, image_size)
 
             if (event_number + 1) % 10 == 0:
-                print(f"Processed {event_number + 1}/{total_events} events.")
+                print(f"Processed {event_number + 1} events.")
 
-        print(f"Completed processing {min(event_number + 1, num_events or total_events)} events.")
+        print(f"Completed processing {event_number + 1} events.")
 
 
 if __name__ == "__main__":
@@ -129,9 +149,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    for view in ["u", "v", "w"]:
+    for view in ["U", "V", "W"]:
         input_file = os.path.join(args.raw_dir, f"{args.file_prefix}{view}.csv")
         output_folder = os.path.join(args.processed_dir, f"images_{view}")
         os.makedirs(output_folder, exist_ok=True)
 
+        print(f"Starting processing for view {view}.")
         process_file(input_file, output_folder, view, image_size=tuple(args.image_size), num_events=args.num_events)
