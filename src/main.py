@@ -80,7 +80,7 @@ def train_model(args):
                 print(f"[Step {valid_step}] Val Loss: {val_loss.item():.4f}")
                 valid_step += 1
 
-        visualise_predictions(model, bunch.valid_dl, device, args.output_dir, num_samples=5, num_classes=args.num_classes)
+        visualise_predictions(model, bunch.valid_dl, device, args.output_dir, num_samples=10, num_classes=args.num_classes)
 
     return model, metrics
 

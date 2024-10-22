@@ -125,7 +125,7 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
                 input_img[input_img < 4] = 4
 
                 ax[0].imshow(input_img, cmap='jet', aspect='equal', interpolation='none')
-                ax[0].set_title('Input Image (Jet)')
+                ax[0].set_title('')
                 ax[0].axis('off')
 
                 cmap = ListedColormap(['white', 'red', 'blue', 'cyan', 'green', 'yellow', 'purple'])
@@ -133,12 +133,12 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
                 norm = BoundaryNorm(bounds, cmap.N)
                 masked_ground_truth = np.ma.masked_invalid(ground_truth)
                 ax[1].imshow(masked_ground_truth, cmap=cmap, norm=norm, aspect='equal', interpolation='none')
-                ax[1].set_title('Ground Truth')
+                ax[1].set_title('')
                 ax[1].axis('off')
 
                 masked_prediction = np.ma.masked_invalid(prediction)
                 ax[2].imshow(masked_prediction, cmap=cmap, norm=norm, aspect='equal', interpolation='none')
-                ax[2].set_title('Prediction')
+                ax[2].set_title('')
                 ax[2].axis('off')
 
                 plt.tight_layout()
