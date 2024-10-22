@@ -7,6 +7,7 @@ from model import UNet
 import csv
 import os
 import torch.nn.functional as F
+from matplotlib.colors import LogNorm, ListedColormap, BoundaryNorm
 
 def set_seed(seed):
     torch.backends.cudnn.deterministic = True
@@ -101,17 +102,6 @@ def create_model(num_classes, weights, device):
     
     return model, loss_fn, optim
 
-
-import os
-import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm, ListedColormap, BoundaryNorm
-import torch
-
-import os
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, BoundaryNorm
-import torch
-
 def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_classes=4):
     model.eval()
     samples = 0
@@ -132,6 +122,7 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
                 prediction = preds[i]
 
                 fig, ax = plt.subplots(1, 3, figsize=(18, 6))
+                input_img[input_img < 1e3] = 1e3
 
                 ax[0].imshow(input_img, cmap='jet', aspect='equal', interpolation='none')
                 ax[0].set_title('Input Image (Jet)')
