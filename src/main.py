@@ -79,6 +79,9 @@ def train_model(args):
 
 def trace_model(args, best_val_model):
     device = torch.device('cpu')  
+    if not best_val_model.endswith('.pt'):
+        best_val_model += '.pt'
+        
     model = load_model(best_val_model, args.num_classes, device)
     
     example_loader = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
