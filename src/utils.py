@@ -122,18 +122,15 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
             preds = preds.cpu()
 
             for i in range(min(num_samples, x.size(0))):
-                input_img = x[i].squeeze(0)  
+                input_img = x[i].squeeze(0) 
                 ground_truth = y[i]
                 prediction = preds[i]
 
                 fig, ax = plt.subplots(1, 3, figsize=(18, 6))
 
-                input_img[input_img < 1e3] = 1e3
-                ax[0].imshow(input_img, cmap='jet', norm=LogNorm(vmin=1e3), aspect='equal', interpolation='none')
-                ax[0].set_title('Input Image (Log Scale)')
+                ax[0].imshow(input_img, cmap='gray', aspect='equal', interpolation='none')
+                ax[0].set_title('Input Image')
                 ax[0].axis('off')
-                cbar_input = fig.colorbar(ax[0].images[0], ax=ax[0])
-                cbar_input.set_label("Charge")
 
                 cmap = ListedColormap(['white', 'red', 'blue', 'cyan', 'green', 'yellow', 'purple'])
                 bounds = np.arange(0, num_classes + 1)
