@@ -2,9 +2,8 @@ import torch
 import os
 import argparse
 from tqdm import tqdm
-from torch.utils.tensorboard import SummaryWriter
 from dataset import SegmentationDataLoader
-from utils import set_seed, create_model, get_class_weights, load_model, accuracy, save_model, plot_loss_accuracy, dice_coefficient, intersection_over_union
+from utils import set_seed, create_model, get_class_weights, load_model, accuracy, save_model, dice_coefficient, intersection_over_union
 import numpy as np
 
 def train_model(args):
@@ -13,8 +12,6 @@ def train_model(args):
     
     os.makedirs(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/", exist_ok=True)
     set_seed(args.seed)
-
-    writer = SummaryWriter(log_dir=f"{args.output_dir}/logs/pass{args.vertex_pass}/{args.view}")
 
     bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
     train_stats = bunch.count_classes(args.num_classes)
@@ -55,11 +52,7 @@ def train_model(args):
             metrics['train_dice_scores'].append(dice_coefficient(pred, y).cpu().numpy())
             metrics['train_iou_scores'].append(intersection_over_union(pred, y).cpu().numpy())
 
-            writer.add_scalar('Loss/train', loss.item(), step)
-            writer.add_scalar('Accuracy/train', accuracy(pred, y).cpu().numpy(), step)
-            writer.add_scalar('Dice/train', dice_coefficient(pred, y).cpu().numpy(), step)
-            writer.add_scalar('IoU/train', intersection_over_union(pred, y).cpu().numpy(), step)
-
+            print(f"[Step {step}] Train Loss: {loss.item():.4f}, Accuracy: {metrics['train_accs'][-1]:.4f}, Dice: {metrics['train_dice_scores'][-1]:.4f}, IoU: {metrics['train_iou_scores'][-1]:.4f}")
             step += 1 
 
         model.eval()
@@ -76,10 +69,7 @@ def train_model(args):
                 metrics['val_dice_scores'].append(dice_coefficient(pred, y).cpu().numpy())
                 metrics['val_iou_scores'].append(intersection_over_union(pred, y).cpu().numpy())
 
-                writer.add_scalar('Loss/val', val_loss.item(), step)
-                writer.add_scalar('Accuracy/val', accuracy(pred, y).cpu().numpy(), step)
-                writer.add_scalar('Dice/val', dice_coefficient(pred, y).cpu().numpy(), step)
-                writer.add_scalar('IoU/val', intersection_over_union(pred, y).cpu().numpy(), step)
+                print(f"[Step {step}] Val Loss: {val_loss.item():.4f}, Accuracy: {metrics['val_accs'][-1]:.4f}, Dice: {metrics['val_dice_scores'][-1]:.4f}, IoU: {metrics['val_iou_scores'][-1]:.4f}")
 
         current_val_loss = np.mean(metrics['val_losses'][-len(bunch.valid_dl):])  
         if current_val_loss < best_val_loss:
@@ -88,9 +78,6 @@ def train_model(args):
             print(f"Saving model to: {best_val_model}.pt")
             save_model(model, x, best_val_model)
 
-    writer.close()
-
-    # Commented out the plot function
     # plot_loss_accuracy(
     #     metrics['train_losses'], metrics['val_losses'], 
     #     metrics['train_accs'], metrics['val_accs'], 
