@@ -24,7 +24,8 @@ def get_class_weights(stats):
     return [weight / sum(weights) for weight in weights]
 
 def load_model(filename, num_classes, device):
-    model = create_model(num_classes)  
+    weights = None
+    model = create_model(num_classes, weights, device)  
     model.load_state_dict(torch.load(filename, map_location=device, weights_only=True))  
     model = model.to(device)
     return model
