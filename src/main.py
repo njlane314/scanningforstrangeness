@@ -3,13 +3,6 @@ import os
 import argparse
 from tqdm import tqdm
 from dataset import SegmentationDataLoader
-from utils import set_seed, create_model, get_class_weights, load_model, accuracy, save_model, plot_loss_accuracy, plot_class_performance
-
-import torch
-import os
-import argparse
-from tqdm import tqdm
-from dataset import SegmentationDataLoader
 from utils import set_seed, create_model, get_class_weights, load_model, accuracy, save_model, plot_loss_accuracy, dice_coefficient, intersection_over_union
 
 def train_model(args):
