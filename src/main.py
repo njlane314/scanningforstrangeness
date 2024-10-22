@@ -64,6 +64,8 @@ def train_model(args):
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
 
+                print(f"Prediction shape: {pred.shape}, Label shape: {y.shape}")
+
                 metrics['val_losses'].append(val_loss.item())
                 metrics['val_accs'].append(accuracy(pred, y).cpu().numpy())
                 metrics['val_dice_scores'].append(dice_coefficient(pred, y).cpu().numpy())
