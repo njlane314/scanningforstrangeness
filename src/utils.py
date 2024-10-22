@@ -77,53 +77,59 @@ def create_model(num_classes, weights, device):
     return model, loss_fn, optim
 
 
-def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, train_dice_scores, val_dice_scores, train_iou_scores, val_iou_scores, n_epochs, output_dir):
+import matplotlib.pyplot as plt
+import numpy as np
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_loss_accuracy(train_losses, train_loss_std, val_losses, val_loss_std,
+                       train_accs, train_acc_std, val_accs, val_acc_std,
+                       train_dice_scores, train_dice_std, val_dice_scores, val_dice_std,
+                       train_iou_scores, train_iou_std, val_iou_scores, val_iou_std,
+                       n_epochs, output_dir):
     epochs = np.arange(1, n_epochs + 1)
 
-    train_losses = torch.tensor(train_losses).cpu().numpy()
-    val_losses = torch.tensor(val_losses).cpu().numpy()
-    train_accs = torch.tensor(train_accs).cpu().numpy()
-    val_accs = torch.tensor(val_accs).cpu().numpy()
-    train_dice_scores = torch.tensor(train_dice_scores).cpu().numpy()
-    val_dice_scores = torch.tensor(val_dice_scores).cpu().numpy()
-    train_iou_scores = torch.tensor(train_iou_scores).cpu().numpy()
-    val_iou_scores = torch.tensor(val_iou_scores).cpu().numpy()
-
-    csv_path = os.path.join(output_dir, 'loss_accuracy_data.csv')
-    with open(csv_path, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Epoch', 'Train Loss', 'Validation Loss', 'Train Accuracy', 'Validation Accuracy', 'Train Dice', 'Validation Dice', 'Train IoU', 'Validation IoU'])
-        for epoch, tl, vl, ta, va, td, vd, ti, vi in zip(epochs, train_losses, val_losses, train_accs, val_accs, train_dice_scores, val_dice_scores, train_iou_scores, val_iou_scores):
-            writer.writerow([epoch, tl, vl, ta, va, td, vd, ti, vi])
-
-    plt.figure(figsize=(12, 12))
-
-    plt.subplot(3, 1, 1)
-    plt.plot(epochs, train_losses, label='Training Loss', color='blue', marker='o')
-    plt.plot(epochs, val_losses, label='Validation Loss', color='orange', marker='o')
-    plt.title('Training and Validation Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
+    plt.figure(figsize=(8, 6))
+    plt.errorbar(epochs, train_losses, yerr=train_loss_std, label='Training loss', color='blue', capsize=3)
+    plt.errorbar(epochs, val_losses, yerr=val_loss_std, label='Validation loss', color='red', capsize=3)
+    plt.title("Training and Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
     plt.legend()
-
-    plt.subplot(3, 1, 2)
-    plt.plot(epochs, train_accs, label='Training Accuracy', color='blue', marker='o')
-    plt.plot(epochs, val_accs, label='Validation Accuracy', color='orange', marker='o')
-    plt.title('Training and Validation Accuracy')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.legend()
-
-    plt.subplot(3, 1, 3)
-    plt.plot(epochs, train_dice_scores, label='Training Dice Coefficient', color='green', marker='o')
-    plt.plot(epochs, val_dice_scores, label='Validation Dice Coefficient', color='red', marker='o')
-    plt.plot(epochs, train_iou_scores, label='Training IoU', color='purple', marker='o')
-    plt.plot(epochs, val_iou_scores, label='Validation IoU', color='brown', marker='o')
-    plt.title('Dice Coefficient and IoU')
-    plt.xlabel('Epoch')
-    plt.ylabel('Score')
-    plt.legend()
-
     plt.tight_layout()
-    plt.savefig(f"{output_dir}/loss_accuracy_plot.png")
+    plt.savefig(f"{output_dir}/training_validation_loss.png")
+    plt.close()
+
+    plt.figure(figsize=(8, 6))
+    plt.errorbar(epochs, train_accs, yerr=train_acc_std, label='Training accuracy', color='blue', capsize=3)
+    plt.errorbar(epochs, val_accs, yerr=val_acc_std, label='Validation accuracy', color='red', capsize=3)
+    plt.title("Training and Validation Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/training_validation_accuracy.png")
+    plt.close()
+
+    plt.figure(figsize=(8, 6))
+    plt.errorbar(epochs, train_dice_scores, yerr=train_dice_std, label='Training Dice', color='blue', capsize=3)
+    plt.errorbar(epochs, val_dice_scores, yerr=val_dice_std, label='Validation Dice', color='red', capsize=3)
+    plt.title("Training and Validation Dice Coefficient")
+    plt.xlabel("Epoch")
+    plt.ylabel("Dice Coefficient")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/training_validation_dice.png")
+    plt.close()
+
+    plt.figure(figsize=(8, 6))
+    plt.errorbar(epochs, train_iou_scores, yerr=train_iou_std, label='Training IoU', color='blue', capsize=3)
+    plt.errorbar(epochs, val_iou_scores, yerr=val_iou_std, label='Validation IoU', color='red', capsize=3)
+    plt.title("Training and Validation Intersection over Union (IoU)")
+    plt.xlabel("Epoch")
+    plt.ylabel("IoU")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/training_validation_iou.png")
     plt.close()
