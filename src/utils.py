@@ -23,7 +23,7 @@ def get_class_weights(stats):
         weights = 1. / stats
     return [weight / sum(weights) for weight in weights]
 
-def load_model_only(filename, num_classes, device):
+def load_model(filename, num_classes, device):
     model = UNet(1, n_classes = num_classes, depth = 4, n_filters = 16, y_range = (0, num_classes - 1))
     model.load_state_dict(torch.load(filename, map_location=device))
     model.eval()

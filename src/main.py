@@ -83,7 +83,7 @@ def trace_model(args, best_val_model):
         best_val_model += '.pt'
 
     print(f"Loading model from {best_val_model}...")
-    model = load_model_only(best_val_model, args.num_classes, device)  
+    model = load_model(best_val_model, args.num_classes, device)  
     
     print("Getting data for tracing...")
     example_loader = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
