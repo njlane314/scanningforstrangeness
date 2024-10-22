@@ -36,8 +36,6 @@ def save_model(model, input, filename):
     pt_path = f"{filename}.pt"
     torch.save(model.state_dict(), pt_path, _use_new_zipfile_serialization=False)
 
-    print(f"Model saved as: {pkl_path} and {pt_path}")
-
 def accuracy(pred, truth, nearby=False):
     target = truth.squeeze(1)
     pred_cls = pred.argmax(dim=1)
@@ -47,6 +45,26 @@ def accuracy(pred, truth, nearby=False):
     else:
         result = pred_cls[mask] == target[mask]
     return result.float().mean()
+
+def dice_coefficient(pred, target, smooth=1e-6):
+    pred = pred.argmax(dim=1) 
+    pred_flat = pred.view(-1)
+    target_flat = target.view(-1)
+
+    intersection = (pred_flat * target_flat).sum().float()
+    dice = (2.0 * intersection + smooth) / (pred_flat.sum() + target_flat.sum() + smooth)
+    return dice
+
+def intersection_over_union(pred, target, smooth=1e-6):
+    pred = pred.argmax(dim=1)
+    pred_flat = pred.view(-1)
+    target_flat = target.view(-1)
+
+    intersection = (pred_flat * target_flat).sum().float()
+    union = pred_flat.sum() + target_flat.sum() - intersection
+    iou = (intersection + smooth) / (union + smooth)
+    return iou
+
 
 def create_model(num_classes, weights, device):
     model = UNet(1, n_classes=num_classes, depth=4, n_filters=16, y_range=(0, num_classes - 1))
@@ -59,23 +77,28 @@ def create_model(num_classes, weights, device):
     return model, loss_fn, optim
 
 
-def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, n_epochs, output_dir):
+def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, train_dice_scores, val_dice_scores, train_iou_scores, val_iou_scores, n_epochs, output_dir):
     epochs = np.arange(1, n_epochs + 1)
 
     train_losses = torch.tensor(train_losses).cpu().numpy()
     val_losses = torch.tensor(val_losses).cpu().numpy()
     train_accs = torch.tensor(train_accs).cpu().numpy()
     val_accs = torch.tensor(val_accs).cpu().numpy()
+    train_dice_scores = torch.tensor(train_dice_scores).cpu().numpy()
+    val_dice_scores = torch.tensor(val_dice_scores).cpu().numpy()
+    train_iou_scores = torch.tensor(train_iou_scores).cpu().numpy()
+    val_iou_scores = torch.tensor(val_iou_scores).cpu().numpy()
 
     csv_path = os.path.join(output_dir, 'loss_accuracy_data.csv')
     with open(csv_path, mode='w', newline='') as file:
         writer = csv.writer(file)
-        writer.writerow(['Epoch', 'Train Loss', 'Validation Loss', 'Train Accuracy', 'Validation Accuracy'])
-        for epoch, tl, vl, ta, va in zip(epochs, train_losses, val_losses, train_accs, val_accs):
-            writer.writerow([epoch, tl, vl, ta, va])
+        writer.writerow(['Epoch', 'Train Loss', 'Validation Loss', 'Train Accuracy', 'Validation Accuracy', 'Train Dice', 'Validation Dice', 'Train IoU', 'Validation IoU'])
+        for epoch, tl, vl, ta, va, td, vd, ti, vi in zip(epochs, train_losses, val_losses, train_accs, val_accs, train_dice_scores, val_dice_scores, train_iou_scores, val_iou_scores):
+            writer.writerow([epoch, tl, vl, ta, va, td, vd, ti, vi])
 
-    plt.figure(figsize=(12, 8))
-    plt.subplot(2, 1, 1)
+    plt.figure(figsize=(12, 12))
+
+    plt.subplot(3, 1, 1)
     plt.plot(epochs, train_losses, label='Training Loss', color='blue', marker='o')
     plt.plot(epochs, val_losses, label='Validation Loss', color='orange', marker='o')
     plt.title('Training and Validation Loss')
@@ -83,7 +106,7 @@ def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, n_epochs,
     plt.ylabel('Loss')
     plt.legend()
 
-    plt.subplot(2, 1, 2)
+    plt.subplot(3, 1, 2)
     plt.plot(epochs, train_accs, label='Training Accuracy', color='blue', marker='o')
     plt.plot(epochs, val_accs, label='Validation Accuracy', color='orange', marker='o')
     plt.title('Training and Validation Accuracy')
@@ -91,29 +114,16 @@ def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, n_epochs,
     plt.ylabel('Accuracy')
     plt.legend()
 
+    plt.subplot(3, 1, 3)
+    plt.plot(epochs, train_dice_scores, label='Training Dice Coefficient', color='green', marker='o')
+    plt.plot(epochs, val_dice_scores, label='Validation Dice Coefficient', color='red', marker='o')
+    plt.plot(epochs, train_iou_scores, label='Training IoU', color='purple', marker='o')
+    plt.plot(epochs, val_iou_scores, label='Validation IoU', color='brown', marker='o')
+    plt.title('Dice Coefficient and IoU')
+    plt.xlabel('Epoch')
+    plt.ylabel('Score')
+    plt.legend()
+
     plt.tight_layout()
     plt.savefig(f"{output_dir}/loss_accuracy_plot.png")
-    plt.close()
-
-def plot_class_performance(iou_scores, dice_scores, class_names, n_epochs, output_dir):
-    epochs = np.arange(1, n_epochs + 1)
-
-    for i, class_name in enumerate(class_names):
-        plt.plot(epochs, np.array(iou_scores)[:, i], label=f'{class_name}')
-    plt.xlabel('Epochs')
-    plt.ylabel('IoU')
-    plt.title('IoU per Class')
-    plt.legend(loc='upper right')
-    plt.grid(True)
-    plt.savefig(f"{output_dir}/iou_plot.png")
-    plt.close()
-
-    for i, class_name in enumerate(class_names):
-        plt.plot(epochs, np.array(dice_scores)[:, i], label=f'{class_name}')
-    plt.xlabel('Epochs')
-    plt.ylabel('Dice Coefficient')
-    plt.title('Dice Coefficient per Class')
-    plt.legend(loc='upper right')
-    plt.grid(True)
-    plt.savefig(f"{output_dir}/dice_plot.png")
     plt.close()
