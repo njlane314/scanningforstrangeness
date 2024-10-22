@@ -21,6 +21,7 @@ def train_model(args):
     val_accs = torch.zeros(args.n_epochs, device=device)
 
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
+    model = model.to(device) 
 
     best_val_loss = float('inf')
     best_val_model = None
@@ -32,13 +33,13 @@ def train_model(args):
         for batch in bunch.train_dl:
             x, y = batch
             x, y = x.to(device), y.to(device)  
-            pred = model(x)
+            pred = model(x)  
             loss = loss_fn(pred, y)
             train_losses[i] = loss.item()
             train_accs[i] = accuracy(pred, y)
-            loss.backward()
-            optim.step()
-            optim.zero_grad()
+            loss.backward() 
+            optim.step() 
+            optim.zero_grad() 
             i += 1
 
         model.eval()
@@ -46,7 +47,7 @@ def train_model(args):
             val_loss, val_acc = [], []
             for x, y in bunch.valid_dl:
                 x, y = x.to(device), y.to(device)  
-                pred = model(x)
+                pred = model(x)  
                 val_loss.append(loss_fn(pred, y).item())
                 val_acc.append(accuracy(pred, y))
             avg_val_loss = torch.mean(torch.tensor(val_loss, device=device))
@@ -61,6 +62,7 @@ def train_model(args):
     plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, args.n_epochs, args.output_dir)
     
     return best_val_model
+
 
 
 def trace_model(args, best_val_model):
