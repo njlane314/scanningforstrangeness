@@ -73,6 +73,7 @@ class UNet(nn.Module):
         self.ds_conv_2 = ConvBlock(n_filters, 2 * n_filters)
         self.ds_conv_3 = ConvBlock(2 * n_filters, 4 * n_filters)
         self.ds_conv_4 = ConvBlock(4 * n_filters, 8 * n_filters)
+        self.ds_conv_5 = ConvBlock(8 * n_filters, 16 * n_filters)
 
         self.ds_maxpool_1 = maxpool()
         self.ds_maxpool_2 = maxpool()
@@ -91,6 +92,7 @@ class UNet(nn.Module):
         self.us_tconv_2 = TransposeConvBlock(4 * n_filters, 2 * n_filters)
         self.us_tconv_1 = TransposeConvBlock(2 * n_filters, n_filters)
 
+        self.us_conv_5 = ConvBlock(32 * n_filters, 16 * n_filters)
         self.us_conv_4 = ConvBlock(16 * n_filters, 8 * n_filters)
         self.us_conv_3 = ConvBlock(8 * n_filters, 4 * n_filters)
         self.us_conv_2 = ConvBlock(4 * n_filters, 2 * n_filters)

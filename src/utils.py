@@ -72,7 +72,7 @@ def create_model(num_classes, weights, device):
         loss_fn = nn.CrossEntropyLoss(torch.as_tensor(weights, device=device, dtype=torch.float))
     else:
         loss_fn = nn.CrossEntropyLoss() 
-    optim = torch.optim.Adam(model.parameters())
+    optim = torch.optim.Adam(model.parameters(), lr=1e-4)
     
     return model, loss_fn, optim
 
