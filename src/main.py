@@ -123,4 +123,4 @@ if __name__ == "__main__":
     val_model, metrics = train_model(args)
     #trace_model(args, val_model)
 
-    plot_loss(metrics)
+    plot_loss(args.output_dir, metrics)

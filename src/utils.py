@@ -128,7 +128,7 @@ def plot_loss_accuracy(train_losses, val_losses,
     plt.savefig(f"{output_dir}/training_validation_iou.png")
     plt.close()
 
-def plot_loss(metrics):
+def plot_loss(output_dir, metrics):
     steps = np.arange(len(metrics['train_losses']))
 
     plt.figure(figsize=(8, 6))
@@ -144,4 +144,6 @@ def plot_loss(metrics):
     plt.title('Training and Test Loss Over Steps')
 
     plt.legend()
-    plt.show()
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/training_validation_iou.png")
+    plt.close()
