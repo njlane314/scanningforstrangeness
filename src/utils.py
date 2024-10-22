@@ -52,9 +52,14 @@ def accuracy(pred, truth, nearby=False):
 
 def create_model(num_classes, weights, device):
     model = UNet(1, n_classes=num_classes, depth=4, n_filters=16, y_range=(0, num_classes - 1))
-    loss_fn = nn.CrossEntropyLoss(torch.as_tensor(weights, device=device, dtype=torch.float))
-    optim = opt.Adam(model.parameters())
+    if weights is not None:
+        loss_fn = nn.CrossEntropyLoss(torch.as_tensor(weights, device=device, dtype=torch.float))
+    else:
+        loss_fn = nn.CrossEntropyLoss() 
+    optim = torch.optim.Adam(model.parameters())
+    
     return model, loss_fn, optim
+
 
 def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, n_epochs, output_dir):
     epochs = np.arange(1, n_epochs + 1)
