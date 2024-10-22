@@ -76,25 +76,22 @@ def create_model(num_classes, weights, device):
     
     return model, loss_fn, optim
 
-
 import matplotlib.pyplot as plt
 import numpy as np
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-def plot_loss_accuracy(train_losses, train_loss_std, val_losses, val_loss_std,
-                       train_accs, train_acc_std, val_accs, val_acc_std,
-                       train_dice_scores, train_dice_std, val_dice_scores, val_dice_std,
-                       train_iou_scores, train_iou_std, val_iou_scores, val_iou_std,
-                       n_epochs, output_dir):
-    epochs = np.arange(1, n_epochs + 1)
+def plot_loss_accuracy(train_losses, val_losses,
+                       train_accs, val_accs,
+                       train_dice_scores, val_dice_scores,
+                       train_iou_scores, val_iou_scores,
+                       n_batches, output_dir):
+    
+    batches = np.arange(1, n_batches + 1)
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(epochs, train_losses, yerr=train_loss_std, label='Training loss', color='blue', capsize=3)
-    plt.errorbar(epochs, val_losses, yerr=val_loss_std, label='Validation loss', color='red', capsize=3)
+    plt.plot(batches, train_losses, label='Training loss', color='blue')
+    plt.plot(batches, val_losses, label='Validation loss', color='red')
     plt.title("Training and Validation Loss")
-    plt.xlabel("Epoch")
+    plt.xlabel("Batch")
     plt.ylabel("Loss")
     plt.legend()
     plt.tight_layout()
@@ -102,10 +99,10 @@ def plot_loss_accuracy(train_losses, train_loss_std, val_losses, val_loss_std,
     plt.close()
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(epochs, train_accs, yerr=train_acc_std, label='Training accuracy', color='blue', capsize=3)
-    plt.errorbar(epochs, val_accs, yerr=val_acc_std, label='Validation accuracy', color='red', capsize=3)
+    plt.plot(batches, train_accs, label='Training accuracy', color='blue')
+    plt.plot(batches, val_accs, label='Validation accuracy', color='red')
     plt.title("Training and Validation Accuracy")
-    plt.xlabel("Epoch")
+    plt.xlabel("Batch")
     plt.ylabel("Accuracy")
     plt.legend()
     plt.tight_layout()
@@ -113,10 +110,10 @@ def plot_loss_accuracy(train_losses, train_loss_std, val_losses, val_loss_std,
     plt.close()
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(epochs, train_dice_scores, yerr=train_dice_std, label='Training Dice', color='blue', capsize=3)
-    plt.errorbar(epochs, val_dice_scores, yerr=val_dice_std, label='Validation Dice', color='red', capsize=3)
+    plt.plot(batches, train_dice_scores, label='Training Dice', color='blue')
+    plt.plot(batches, val_dice_scores, label='Validation Dice', color='red')
     plt.title("Training and Validation Dice Coefficient")
-    plt.xlabel("Epoch")
+    plt.xlabel("Batch")
     plt.ylabel("Dice Coefficient")
     plt.legend()
     plt.tight_layout()
@@ -124,10 +121,10 @@ def plot_loss_accuracy(train_losses, train_loss_std, val_losses, val_loss_std,
     plt.close()
 
     plt.figure(figsize=(8, 6))
-    plt.errorbar(epochs, train_iou_scores, yerr=train_iou_std, label='Training IoU', color='blue', capsize=3)
-    plt.errorbar(epochs, val_iou_scores, yerr=val_iou_std, label='Validation IoU', color='red', capsize=3)
+    plt.plot(batches, train_iou_scores, label='Training IoU', color='blue')
+    plt.plot(batches, val_iou_scores, label='Validation IoU', color='red')
     plt.title("Training and Validation Intersection over Union (IoU)")
-    plt.xlabel("Epoch")
+    plt.xlabel("Batch")
     plt.ylabel("IoU")
     plt.legend()
     plt.tight_layout()

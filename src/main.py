@@ -4,7 +4,6 @@ import argparse
 from tqdm import tqdm
 from dataset import SegmentationDataLoader
 from utils import set_seed, create_model, get_class_weights, load_model, accuracy, save_model, plot_loss_accuracy, dice_coefficient, intersection_over_union
-from torch.cuda.amp import autocast, GradScaler
 import numpy as np
 
 def train_model(args):
@@ -20,27 +19,22 @@ def train_model(args):
 
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
     model = model.to(device)
-    
-    scaler = torch.amp.GradScaler('cuda')
+
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=3)
 
-    train_losses, train_loss_std = [], []
-    val_losses, val_loss_std = [], []
-    train_accs, train_acc_std = [], []
-    val_accs, val_acc_std = [], []
-    train_dice_scores, train_dice_std = [], []
-    val_dice_scores, val_dice_std = [], []
-    train_iou_scores, train_iou_std = [], []
-    val_iou_scores, val_iou_std = [], []
+    train_losses, val_losses = [], []
+    train_accs, val_accs = [], []
+    train_dice_scores, val_dice_scores = []
+    train_iou_scores, val_iou_scores = []
 
+    batch_num = 0
     best_val_loss = float('inf')
     best_val_model = None
 
     for e in tqdm(range(args.n_epochs), desc="Training"):
         model.train()
-        batch_train_losses, batch_train_accs = [], []
-        batch_train_dice, batch_train_iou = [], []
-        num_batches = 0
+        epoch_train_loss, epoch_train_acc = 0.0, 0.0
+        epoch_train_dice, epoch_train_iou = 0.0, 0.0
 
         for batch in bunch.train_dl:
             x, y = batch
@@ -48,57 +42,51 @@ def train_model(args):
 
             optim.zero_grad()
 
-            with torch.amp.autocast('cuda'):  
-                pred = model(x)
-                loss = loss_fn(pred, y)
+            pred = model(x)
+            loss = loss_fn(pred, y)
 
-            scaler.scale(loss).backward() 
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) 
-            scaler.step(optim)  
-            scaler.update()  
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optim.step()
 
-            batch_train_losses.append(loss.item())
-            batch_train_accs.append(accuracy(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
-            batch_train_dice.append(dice_coefficient(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
-            batch_train_iou.append(intersection_over_union(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
-            num_batches += 1
+            epoch_train_loss = loss.item()
+            epoch_train_acc = accuracy(pred, y).cpu().numpy()
+            epoch_train_dice = dice_coefficient(pred, y).cpu().numpy()
+            epoch_train_iou = intersection_over_union(pred, y).cpu().numpy()
 
-        train_losses.append(np.mean(batch_train_losses))
-        train_loss_std.append(np.std(batch_train_losses))
-        train_accs.append(np.mean(batch_train_accs))
-        train_acc_std.append(np.std(batch_train_accs))
-        train_dice_scores.append(np.mean(batch_train_dice))
-        train_dice_std.append(np.std(batch_train_dice))
-        train_iou_scores.append(np.mean(batch_train_iou))
-        train_iou_std.append(np.std(batch_train_iou))
+            train_losses.append(epoch_train_loss)
+            train_accs.append(epoch_train_acc)
+            train_dice_scores.append(epoch_train_dice)
+            train_iou_scores.append(epoch_train_iou)
+
+            batch_num += 1
 
         model.eval()
-        batch_val_losses, batch_val_accs = [], []
-        batch_val_dice, batch_val_iou = [], []
+        epoch_val_loss, epoch_val_acc = 0.0, 0.0
+        epoch_val_dice, epoch_val_iou = 0.0, 0.0
         num_val_batches = 0
 
         with torch.no_grad():
             for x, y in bunch.valid_dl:
                 x, y = x.to(device), y.to(device)
+
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
-                batch_val_losses.append(val_loss.item())
-                batch_val_accs.append(accuracy(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
-                batch_val_dice.append(dice_coefficient(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
-                batch_val_iou.append(intersection_over_union(pred, y).cpu().numpy())  # Convert tensor to CPU then to NumPy
+
+                epoch_val_loss = val_loss.item()
+                epoch_val_acc = accuracy(pred, y).cpu().numpy()
+                epoch_val_dice = dice_coefficient(pred, y).cpu().numpy()
+                epoch_val_iou = intersection_over_union(pred, y).cpu().numpy()
+
+                val_losses.append(epoch_val_loss)
+                val_accs.append(epoch_val_acc)
+                val_dice_scores.append(epoch_val_dice)
+                val_iou_scores.append(epoch_val_iou)
+
                 num_val_batches += 1
 
-        val_losses.append(np.mean(batch_val_losses))
-        val_loss_std.append(np.std(batch_val_losses))
-        val_accs.append(np.mean(batch_val_accs))
-        val_acc_std.append(np.std(batch_val_accs))
-        val_dice_scores.append(np.mean(batch_val_dice))
-        val_dice_std.append(np.std(batch_val_dice))
-        val_iou_scores.append(np.mean(batch_val_iou))
-        val_iou_std.append(np.std(batch_val_iou))
-
-        if np.mean(batch_val_losses) < best_val_loss:
-            best_val_loss = np.mean(batch_val_losses)
+        if (epoch_val_loss / num_val_batches) < best_val_loss:
+            best_val_loss = epoch_val_loss / num_val_batches
             best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best"
             print(f"Saving model to: {best_val_model}.pt")
             save_model(model, x, best_val_model)
@@ -106,13 +94,9 @@ def train_model(args):
         print(f"Epoch {e+1}/{args.n_epochs} - Train Dice: {train_dice_scores[-1]:.4f} - Val Dice: {val_dice_scores[-1]:.4f}")
         print(f"Epoch {e+1}/{args.n_epochs} - Train IoU: {train_iou_scores[-1]:.4f} - Val IoU: {val_iou_scores[-1]:.4f}")
 
-        scheduler.step(np.mean(batch_val_losses))
+        scheduler.step(np.mean(val_losses))
 
-    plot_loss_accuracy(train_losses, train_loss_std, val_losses, val_loss_std,
-                       train_accs, train_acc_std, val_accs, val_acc_std,
-                       train_dice_scores, train_dice_std, val_dice_scores, val_dice_std,
-                       train_iou_scores, train_iou_std, val_iou_scores, val_iou_std,
-                       args.n_epochs, args.output_dir)
+    plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, train_dice_scores, val_dice_scores, train_iou_scores, val_iou_scores, batch_num, args.output_dir)
 
     return best_val_model
 
@@ -125,7 +109,6 @@ def trace_model(args, best_val_model):
     print(f"Loading model from {best_val_model}...")
     model = load_model(best_val_model, args.num_classes, device)
 
-    print("Getting data for tracing...")
     example_loader = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
 
     input_examples = None
