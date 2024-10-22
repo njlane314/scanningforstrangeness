@@ -11,6 +11,7 @@ def train_model(args):
     print(f"Using device: {device}")
     
     os.makedirs(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/", exist_ok=True)
+
     set_seed(args.seed)
 
     bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
@@ -29,15 +30,9 @@ def train_model(args):
         'valid_losses': []
     }
 
-    #best_val_loss = float('inf')
-    #best_val_model = None
-
-    set_seed(args.seed)
-    step = 0 
-
+    step = 0  
     for e in tqdm(range(args.n_epochs), desc="Training"):
         model.train()
-
         for batch in bunch.train_dl:
             x, y = batch
             x, y = x.to(device), y.to(device)
@@ -45,15 +40,17 @@ def train_model(args):
             print(f"Input data range: {x.min().item()} to {x.max().item()}")
             print(f"Label data range: {y.min().item()} to {y.max().item()}")
 
-            pred = model.forward(x)
             y = y.to(torch.long)
+
+            optim.zero_grad()
+
+            pred = model(x)
             print(f"Prediction shape: {pred.shape}, Ground truth shape: {y.shape}")
             
             loss = loss_fn(pred, y)
 
             loss.backward()
             optim.step()
-            optim.zero_grad()
 
             for name, param in model.named_parameters():
                 if param.grad is None:
@@ -62,7 +59,6 @@ def train_model(args):
                     print(f"Parameter {name} has gradient mean: {param.grad.mean().item()}")
 
             metrics['train_losses'].append(loss.item())
-
             print(f"[Step {step}] Train Loss: {loss.item():.4f}")
             step += 1 
 
@@ -79,15 +75,9 @@ def train_model(args):
                 val_loss = loss_fn(pred, y)
 
                 metrics['valid_losses'].append(val_loss.item())
-
                 print(f"[Step {step}] Val Loss: {val_loss.item():.4f}")
 
-        #current_val_loss = np.mean(metrics['valid_losses'][-len(bunch.valid_dl):])  
-        #if current_val_loss < best_val_loss:
-        #    best_val_loss = current_val_loss
-        #    best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best"
-        #    print(f"Saving model to: {best_val_model}.pt")
-        #    save_model(model, x, best_val_model)
+    return model
 
 def trace_model(args, best_val_model):
     device = torch.device('cpu')
