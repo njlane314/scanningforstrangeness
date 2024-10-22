@@ -42,13 +42,12 @@ def train_model(args):
 
             optim.zero_grad()
             pred = model(x)
+            
             loss = loss_fn(pred, y)
-
             loss.backward()
             optim.step()
 
-            pred_classes = torch.argmax(pred, dim=1)
-
+            pred_classes = torch.argmax(pred, dim=1) 
             metrics['train_losses'].append(loss.item())
             metrics['train_accs'].append(accuracy(pred_classes, y).cpu().numpy())
             metrics['train_dice_scores'].append(dice_coefficient(pred_classes, y).cpu().numpy())
@@ -67,7 +66,7 @@ def train_model(args):
                 val_loss = loss_fn(pred, y)
 
                 pred_classes = torch.argmax(pred, dim=1)
-                
+
                 metrics['val_losses'].append(val_loss.item())
                 metrics['val_accs'].append(accuracy(pred_classes, y).cpu().numpy())
                 metrics['val_dice_scores'].append(dice_coefficient(pred_classes, y).cpu().numpy())
