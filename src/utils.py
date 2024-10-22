@@ -69,7 +69,7 @@ def intersection_over_union(pred, target, smooth=1e-6):
 class FocalLoss(nn.Module):
     def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
         super(FocalLoss, self).__init__()
-        self.alpha = alpha 
+        self.alpha = alpha
         self.gamma = gamma
         self.reduction = reduction
 
@@ -77,8 +77,9 @@ class FocalLoss(nn.Module):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         p_t = torch.exp(-ce_loss)
         loss = (1 - p_t) ** self.gamma * ce_loss
+
         if self.alpha is not None:
-            alpha_t = self.alpha.gather(0, targets.data.view(-1))
+            alpha_t = self.alpha[targets]
             loss = alpha_t * loss
 
         if self.reduction == 'mean':
@@ -87,7 +88,6 @@ class FocalLoss(nn.Module):
             return loss.sum()
         else:
             return loss
-
 
 def create_model(num_classes, weights, device):
     model = UNet(1, n_classes=num_classes, depth=4, n_filters=16)
