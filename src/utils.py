@@ -4,6 +4,8 @@ import torch
 import torch.optim as opt
 import torch.nn as nn
 from model import UNet
+import csv
+import os
 
 def set_seed(seed):
     torch.backends.cudnn.deterministic = True
@@ -54,6 +56,13 @@ def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, n_epochs,
     val_losses = torch.tensor(val_losses).cpu().numpy()
     train_accs = torch.tensor(train_accs).cpu().numpy()
     val_accs = torch.tensor(val_accs).cpu().numpy()
+
+    csv_path = os.path.join(output_dir, 'loss_accuracy_data.csv')
+    with open(csv_path, mode='w', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(['Epoch', 'Train Loss', 'Validation Loss', 'Train Accuracy', 'Validation Accuracy'])
+        for epoch, tl, vl, ta, va in zip(epochs, train_losses, val_losses, train_accs, val_accs):
+            writer.writerow([epoch, tl, vl, ta, va])
 
     plt.figure(figsize=(12, 8))
     plt.subplot(2, 1, 1)
