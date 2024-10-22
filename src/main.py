@@ -24,8 +24,8 @@ def train_model(args):
 
     train_losses, val_losses = [], []
     train_accs, val_accs = [], []
-    train_dice_scores, val_dice_scores = []
-    train_iou_scores, val_iou_scores = []
+    train_dice_scores, val_dice_scores = [], []
+    train_iou_scores, val_iou_scores = [], []
 
     batch_num = 0
     best_val_loss = float('inf')
