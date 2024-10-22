@@ -30,8 +30,13 @@ def load_model(filename, num_classes, device):
     return model
 
 def save_model(model, input, filename):
-    torch.save(model.state_dict(), f"{filename}.pkl")
-    torch.save(model.state_dict(), filename + ".pt", _use_new_zipfile_serialization=False)
+    pkl_path = f"{filename}.pkl"
+    torch.save(model.state_dict(), pkl_path)
+
+    pt_path = f"{filename}.pt"
+    torch.save(model.state_dict(), pt_path, _use_new_zipfile_serialization=False)
+
+    print(f"Model saved as: {pkl_path} and {pt_path}")
 
 def accuracy(pred, truth, nearby=False):
     target = truth.squeeze(1)
