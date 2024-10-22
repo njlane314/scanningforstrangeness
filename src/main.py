@@ -30,9 +30,9 @@ def train_model(args):
     train_accs, train_acc_std = [], []
     val_accs, val_acc_std = [], []
     train_dice_scores, train_dice_std = [], []
-    val_dice_scores, val_dice_std = []
+    val_dice_scores, val_dice_std = [], []
     train_iou_scores, train_iou_std = [], []
-    val_iou_scores, val_iou_std = []
+    val_iou_scores, val_iou_std = [], []
 
     best_val_loss = float('inf')
     best_val_model = None
