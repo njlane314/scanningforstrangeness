@@ -91,8 +91,8 @@ def train_model(args):
         print(f"Epoch {e+1}/{args.n_epochs} - Train Dice: {train_dice_scores[-1]:.4f} - Val Dice: {val_dice_scores[-1]:.4f}")
         print(f"Epoch {e+1}/{args.n_epochs} - Train IoU: {train_iou_scores[-1]:.4f} - Val IoU: {val_iou_scores[-1]:.4f}")
 
-    plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, args.n_epochs, args.output_dir)
-    
+    plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, train_dice_scores, val_dice_scores, train_iou_scores, val_iou_scores, args.n_epochs, args.output_dir)
+
     return best_val_model
 
 
