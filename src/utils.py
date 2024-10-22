@@ -122,7 +122,7 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
                 prediction = preds[i]
 
                 fig, ax = plt.subplots(1, 3, figsize=(18, 6))
-                input_img[input_img < 1e3] = 1e3
+                input_img[input_img < 3] = 3
 
                 ax[0].imshow(input_img, cmap='jet', aspect='equal', interpolation='none')
                 ax[0].set_title('Input Image (Jet)')
