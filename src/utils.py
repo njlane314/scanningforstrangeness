@@ -126,11 +126,11 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3):
                 ax[0].set_title('Input Image')
                 ax[0].axis('off')
 
-                ax[1].imshow(ground_truth, cmap='jet', vmin=0, vmax=loader.dataset.num_classes - 1)
+                ax[1].imshow(ground_truth, cmap='jet', vmin=0, vmax=loader.dataset.count_classes - 1)
                 ax[1].set_title('Ground Truth')
                 ax[1].axis('off')
 
-                ax[2].imshow(prediction, cmap='jet', vmin=0, vmax=loader.dataset.num_classes - 1)
+                ax[2].imshow(prediction, cmap='jet', vmin=0, vmax=loader.dataset.count_classes - 1)
                 ax[2].set_title('Prediction')
                 ax[2].axis('off')
 
