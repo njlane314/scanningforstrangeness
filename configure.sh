@@ -15,7 +15,7 @@ export FILE_PREFIX="training_output_"
 export BATCH_SIZE=32
 export NUM_CLASSES=4
 export N_EPOCHS=50
-export MODEL_NAME="model"
+export MODEL_NAME="testing_model"
 export VIEW="U"
 export VERTEX_PASS=1
 export SEED=12345
@@ -74,3 +74,8 @@ echo "USERNAME: $USERNAME"
 echo "SERVER: $SERVER"
 echo "REMOTE_DIR: $REMOTE_DIR"
 echo "LOCAL_DIR: $LOCAL_DIR"
+
+alias cdd="cd $DATA_DIR"
+alias cdc="cd $CURRENT_DIR"
+echo -e "${YELLOW}-- Available aliases:${NC}"
+alias | grep 'cd'
