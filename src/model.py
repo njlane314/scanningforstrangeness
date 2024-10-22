@@ -10,9 +10,9 @@ def dropout(prob):
 def reinit_layer(layer, leak=0.0, use_kaiming_normal=True):
     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.ConvTranspose2d):
         if use_kaiming_normal:
-            nn.init.kaiming_normal_(layer.weight, a=leak)
+            nn.init.kaiming_normal_(layer.weight, a = leak)
         else:
-            nn.init.kaiming_uniform_(layer.weight, a=leak)
+            nn.init.kaiming_uniform_(layer.weight, a = leak)
             layer.bias.data.zero_()
 
 class ConvBlock(nn.Module):

@@ -15,6 +15,9 @@ def train_model(args):
     set_seed(args.seed)
 
     bunch = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
+    max_value = bunch.find_max_value()
+    bunch.apply_normalization(max_value)
+
     train_stats = bunch.count_classes(args.num_classes)
     weights = get_class_weights(train_stats)
 

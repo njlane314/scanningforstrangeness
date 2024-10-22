@@ -13,12 +13,13 @@ def nan_mean(v, *args, inplace=False, **kwargs):
     return v.sum(*args, **kwargs) / (~is_nan).float().sum(*args, **kwargs)
 
 class SegmentationData(Dataset):
-    def __init__(self, image_dir, mask_dir, filenames, transform=False, device=torch.device('cuda:0')):
+    def __init__(self, image_dir, mask_dir, filenames, transform=False, device=torch.device('cuda:0'), max_value=None):
         self.image_dir = image_dir
         self.mask_dir = mask_dir
         self.transform = transform
         self.filenames = filenames
         self.device = device
+        self.max_value = max_value 
 
     def __len__(self):
         return len(self.filenames)
@@ -35,23 +36,25 @@ class SegmentationData(Dataset):
         image = torch.as_tensor(np.expand_dims(image, axis=0), dtype=torch.float).to(self.device)
         mask = torch.as_tensor(mask, dtype=torch.long).to(self.device)
 
+        if self.max_value:
+            image = image / self.max_value
+
         if self.transform:
             should_hflip = torch.rand(1) > 0.5
             should_vflip = torch.rand(1) > 0.5
             should_transpose = torch.rand(1) > 0.5
 
             if should_hflip:
-                image = tv.transforms.functional.hflip(image)
-                mask = tv.transforms.functional.hflip(mask)
+                image = torch.flip(image, [2])  
+                mask = torch.flip(mask, [1])
             if should_vflip:
-                image = tv.transforms.functional.vflip(image)
-                mask = tv.transforms.functional.vflip(mask)
+                image = torch.flip(image, [1])  
+                mask = torch.flip(mask, [0])
             if should_transpose:
                 image = image.transpose(1, 2)
-                mask = mask.transpose(1, 2)
+                mask = mask.transpose(0, 1)
 
         return image, mask
-
 
 class SegmentationDataLoader():
     def __init__(self, root_dir, view, batch_size, train_pct=None, valid_pct=0.1,
@@ -80,21 +83,34 @@ class SegmentationDataLoader():
         train_sample = sample[valid_size:] if not train_size else sample[valid_size:valid_size + train_size]
         valid_sample = sample[:valid_size]
 
-        train_ds = SegmentationData(image_dir, mask_dir, image_filenames[train_sample], transform, device)
-        self.train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=0)
+        self.max_value = None
 
-        valid_ds = SegmentationData(image_dir, mask_dir, image_filenames[valid_sample], None, device)
-        self.valid_dl = DataLoader(valid_ds, batch_size=batch_size, shuffle=False, drop_last=True, num_workers=0)
+        self.train_ds = SegmentationData(image_dir, mask_dir, image_filenames[train_sample], transform, device)
+        self.valid_ds = SegmentationData(image_dir, mask_dir, image_filenames[valid_sample], None, device)
 
-    def count_classes(self, num_classes):
-        count = np.zeros(num_classes)
-        for batch in tqdm(self.train_dl, desc="Counting Classes"):
-            _, truth = batch
-            unique = torch.unique(truth)
-            counts = torch.stack([(truth == x_u).sum() for x_u in unique])
-            unique = [u.item() for u in unique]
-            counts = [c.item() for c in counts]
-            this_dict = dict(zip(unique, counts))
-            for key in this_dict:
-                count[key] += this_dict[key]
-        return count
+        self.train_dl = DataLoader(self.train_ds, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=0)
+        self.valid_dl = DataLoader(self.valid_ds, batch_size=batch_size, shuffle=False, drop_last=True, num_workers=0)
+
+    def find_max_value(self):
+        max_value = -float('inf')
+        for batch in tqdm(self.train_dl, desc="Finding max value"):
+            images, _ = batch
+            max_value = max(max_value, images.max().item())
+        return max_value
+
+    def apply_normalization(self, max_value):
+        self.max_value = max_value
+
+        self.train_ds = SegmentationData(self.train_ds.image_dir, self.train_ds.mask_dir,
+                                         self.train_ds.filenames, self.train_ds.transform,
+                                         self.train_ds.device, max_value=self.max_value)
+
+        self.valid_ds = SegmentationData(self.valid_ds.image_dir, self.valid_ds.mask_dir,
+                                         self.valid_ds.filenames, self.valid_ds.transform,
+                                         self.valid_ds.device, max_value=self.max_value)
+
+        self.train_dl = DataLoader(self.train_ds, batch_size=self.train_dl.batch_size,
+                                   shuffle=True, drop_last=True, num_workers=0)
+        self.valid_dl = DataLoader(self.valid_ds, batch_size=self.valid_dl.batch_size,
+                                   shuffle=False, drop_last=True, num_workers=0)
+
