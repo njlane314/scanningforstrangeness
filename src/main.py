@@ -26,6 +26,7 @@ def train_model(args):
     val_iou_scores = []
 
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
+    loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(weights).to(device))
     model = model.to(device) 
 
     best_val_loss = float('inf')
