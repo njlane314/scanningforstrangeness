@@ -24,9 +24,9 @@ def train_model(args):
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
     model = model.to(device)
 
-    for name, param in model.named_parameters():
-        if 'weight' in name:
-            print(f"Weight initialization for {name}, mean: {param.mean().item()}, std: {param.std().item()}")
+    #for name, param in model.named_parameters():
+    #    if 'weight' in name:
+    #        print(f"Weight initialization for {name}, mean: {param.mean().item()}, std: {param.std().item()}")
 
     metrics = {
         'train_losses': [], 
@@ -40,26 +40,26 @@ def train_model(args):
             x, y = batch
             x, y = x.to(device), y.to(device)
 
-            print(f"Input data range: {x.min().item()} to {x.max().item()}")
-            print(f"Label data range: {y.min().item()} to {y.max().item()}")
+            #print(f"Input data range: {x.min().item()} to {x.max().item()}")
+            #print(f"Label data range: {y.min().item()} to {y.max().item()}")
 
             y = y.to(torch.long)
 
             optim.zero_grad()
 
             pred = model(x)
-            print(f"Prediction shape: {pred.shape}, Ground truth shape: {y.shape}")
+            #print(f"Prediction shape: {pred.shape}, Ground truth shape: {y.shape}")
             
             loss = loss_fn(pred, y)
 
             loss.backward()
             optim.step()
 
-            for name, param in model.named_parameters():
-                if param.grad is None:
-                    print(f"Parameter {name} has no gradient")
-                else:
-                    print(f"Parameter {name} has gradient mean: {param.grad.mean().item()}")
+            #for name, param in model.named_parameters():
+            #    if param.grad is None:
+            #        print(f"Parameter {name} has no gradient")
+            #    else:
+            #        print(f"Parameter {name} has gradient mean: {param.grad.mean().item()}")
 
             metrics['train_losses'].append(loss.item())
             print(f"[Step {step}] Train Loss: {loss.item():.4f}")
@@ -71,8 +71,8 @@ def train_model(args):
                 x, y = batch
                 x, y = x.to(device), y.to(device)
 
-                print(f"Input data range: {x.min().item()} to {x.max().item()}")
-                print(f"Label data range: {y.min().item()} to {y.max().item()}")
+                #print(f"Input data range: {x.min().item()} to {x.max().item()}")
+                #print(f"Label data range: {y.min().item()} to {y.max().item()}")
 
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
