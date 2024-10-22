@@ -85,3 +85,5 @@ alias cdw="cd $WORKING_DIR"
 
 echo -e "${CYAN}-- Available aliases:${NC}"
 alias | grep 'cd'
+
+echo -e "${BLUE}-- To configure the python environment run 'conda activate pythondl'${NC}"

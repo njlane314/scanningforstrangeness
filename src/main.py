@@ -16,10 +16,10 @@ def train_model(args):
     train_stats = bunch.count_classes(args.num_classes)
     weights = get_class_weights(train_stats)
 
-    train_losses = torch.zeros(args.n_epochs * len(bunch.train_dl), device=device)
-    val_losses = torch.zeros(args.n_epochs, device=device)
-    train_accs = torch.zeros(args.n_epochs * len(bunch.train_dl), device=device)
-    val_accs = torch.zeros(args.n_epochs, device=device)
+    train_losses = []
+    val_losses = []
+    train_accs = []
+    val_accs = []
 
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
     model = model.to(device) 
@@ -28,42 +28,52 @@ def train_model(args):
     best_val_model = None
     class_names = ['Background'] + [f'Class_{i}' for i in range(1, args.num_classes)]
 
-    i = 0
     for e in tqdm(range(args.n_epochs), desc="Training"):
         model.train()
+        epoch_train_loss = 0.0
+        epoch_train_acc = 0.0
+        num_batches = 0
+
         for batch in bunch.train_dl:
             x, y = batch
             x, y = x.to(device), y.to(device)  
-            pred = model(x)  
+            pred = model(x)
             loss = loss_fn(pred, y)
-            train_losses[i] = loss.item()
-            train_accs[i] = accuracy(pred, y)
-            loss.backward() 
-            optim.step() 
-            optim.zero_grad() 
-            i += 1
+            epoch_train_loss += loss.item()
+            epoch_train_acc += accuracy(pred, y)
+            loss.backward()
+            optim.step()
+            optim.zero_grad()
+            num_batches += 1
+
+        train_losses.append(epoch_train_loss / num_batches)
+        train_accs.append(epoch_train_acc / num_batches)
 
         model.eval()
+        epoch_val_loss = 0.0
+        epoch_val_acc = 0.0
+        num_val_batches = 0
+        
         with torch.no_grad():
-            val_loss, val_acc = [], []
             for x, y in bunch.valid_dl:
                 x, y = x.to(device), y.to(device)  
-                pred = model(x)  
-                val_loss.append(loss_fn(pred, y).item())
-                val_acc.append(accuracy(pred, y))
-            avg_val_loss = torch.mean(torch.tensor(val_loss, device=device))
-            val_losses[e] = avg_val_loss
-            val_accs[e] = torch.mean(torch.tensor(val_acc, device=device))
+                pred = model(x)
+                val_loss = loss_fn(pred, y)
+                epoch_val_loss += val_loss.item()
+                epoch_val_acc += accuracy(pred, y)
+                num_val_batches += 1
 
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best.pt"
-                save_model(model, x, best_val_model)
+        val_losses.append(epoch_val_loss / num_val_batches)
+        val_accs.append(epoch_val_acc / num_val_batches)
+
+        if (epoch_val_loss / num_val_batches) < best_val_loss:
+            best_val_loss = epoch_val_loss / num_val_batches
+            best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best.pt"
+            save_model(model, x, best_val_model)
 
     plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, args.n_epochs, args.output_dir)
     
     return best_val_model
-
 
 
 def trace_model(args, best_val_model):
