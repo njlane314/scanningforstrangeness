@@ -21,8 +21,7 @@ def train_model(args):
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
     model = model.to(device)
     
-    scaler = GradScaler()  
-    
+    scaler = torch.amp.GradScaler('cuda')
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=3)
 
     train_losses, train_loss_std = [], []
@@ -49,7 +48,7 @@ def train_model(args):
 
             optim.zero_grad()
 
-            with autocast():  
+            with torch.amp.autocast('cuda'):  
                 pred = model(x)
                 loss = loss_fn(pred, y)
 
