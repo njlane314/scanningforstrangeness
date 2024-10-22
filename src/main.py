@@ -81,21 +81,27 @@ def trace_model(args, best_val_model):
     device = torch.device('cpu')  
     if not best_val_model.endswith('.pt'):
         best_val_model += '.pt'
-        
-    model = load_model(best_val_model, args.num_classes, device)
+
+    print(f"Loading model from {best_val_model}...")
+    model = load_model_only(best_val_model, args.num_classes, device)  
     
+    print("Getting data for tracing...")
     example_loader = SegmentationDataLoader(args.image_path, args.view, batch_size=args.batch_size, valid_pct=0.25, device=device)
     
+    input_examples = None
     for batch in example_loader.train_dl:
-        example_input = batch[0].to(device)
+        x, _ = batch
+        input_examples = (x.cpu())  
         break
-    
-    traced_model = torch.jit.trace(model, example_input)
-    
+
+    print("Tracing model...")
+    traced_model = torch.jit.trace(model, input_examples)  
+
     traced_model_save_path = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/traced_{args.model_name}.pt"
     traced_model.save(traced_model_save_path)
     
     print(f"Traced model saved to: {traced_model_save_path}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="U-Net Vertex Finder Training")

@@ -13,7 +13,8 @@ mkdir -p "$OUTPUT_RESULTS_DIR"
         -p "$PROCESSED_DATA_DIR" \
         -f "$OUTPUT_FILE_PREFIX" \
         -s $IMAGE_DIMENSIONS \
-        -n $NUM_EVENTS
+        -n $NUM_EVENTS \
+        -v $DETECTOR_VIEW
 
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}-- Preprocessing completed successfully.${NC}"

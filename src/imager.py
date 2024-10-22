@@ -146,13 +146,13 @@ if __name__ == "__main__":
     parser.add_argument('-f', '--file_prefix', type=str, default="training_output_")
     parser.add_argument('-s', '--image_size', type=int, nargs=2, default=[256, 256])
     parser.add_argument('-n', '--num_events', type=int, default=None)
+    parser.add_argument('-v', '--view', type=str, required=True, choices=["U", "V", "W"])
 
     args = parser.parse_args()
 
-    for view in ["U", "V", "W"]:
-        input_file = os.path.join(args.raw_dir, f"{args.file_prefix}{view}.csv")
-        output_folder = os.path.join(args.processed_dir, f"images_{view}")
-        os.makedirs(output_folder, exist_ok=True)
+    input_file = os.path.join(args.raw_dir, f"{args.file_prefix}{args.view}.csv")
+    output_folder = os.path.join(args.processed_dir, f"images_{args.view}")
+    os.makedirs(output_folder, exist_ok=True)
 
-        print(f"Starting processing for view {view}.")
-        process_file(input_file, output_folder, view, image_size=tuple(args.image_size), num_events=args.num_events)
+    print(f"Starting processing for view {args.view}.")
+    process_file(input_file, output_folder, args.view, image_size=tuple(args.image_size), num_events=args.num_events)
