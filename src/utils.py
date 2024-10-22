@@ -76,7 +76,7 @@ class FocalLoss(nn.Module):
     def forward(self, inputs, targets):
         ce_loss = F.cross_entropy(inputs, targets, reduction='none')
         p_t = torch.exp(-ce_loss)
-        loss = (1 - p_t) ** self.gamma * ce_loss
+        loss = (1 - p_t) ** self.gamma * ce_loss * 1000
 
         if self.alpha is not None:
             alpha_t = self.alpha[targets]
@@ -97,7 +97,7 @@ def create_model(num_classes, weights, device):
     else:
         loss_fn = FocalLoss(gamma=2.0)
     
-    optim = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optim = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
     
     return model, loss_fn, optim
 
