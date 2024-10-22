@@ -67,7 +67,7 @@ def intersection_over_union(pred, target, smooth=1e-6):
 
 
 def create_model(num_classes, weights, device):
-    model = UNet(1, n_classes=num_classes, depth=4, n_filters=16, y_range=(0, num_classes - 1))
+    model = UNet(1, n_classes=num_classes, depth=4, n_filters=16)
     if weights is not None:
         loss_fn = nn.CrossEntropyLoss(torch.as_tensor(weights, device=device, dtype=torch.float))
     else:
