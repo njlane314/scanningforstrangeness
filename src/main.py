@@ -7,6 +7,7 @@ from utils import set_seed, create_model, get_class_weights, load_model, accurac
 
 def train_model(args):
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
     
     os.makedirs(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/", exist_ok=True)
     set_seed(args.seed)
