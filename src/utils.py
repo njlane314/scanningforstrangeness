@@ -6,6 +6,7 @@ import torch.nn as nn
 from model import UNet
 import csv
 import os
+import torch.nn.functional as F
 
 def set_seed(seed):
     torch.backends.cudnn.deterministic = True
@@ -65,16 +66,41 @@ def intersection_over_union(pred, target, smooth=1e-6):
     iou = (intersection + smooth) / (union + smooth)
     return iou
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha 
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        p_t = torch.exp(-ce_loss)
+        loss = (1 - p_t) ** self.gamma * ce_loss
+        if self.alpha is not None:
+            alpha_t = self.alpha.gather(0, targets.data.view(-1))
+            loss = alpha_t * loss
+
+        if self.reduction == 'mean':
+            return loss.mean()
+        elif self.reduction == 'sum':
+            return loss.sum()
+        else:
+            return loss
+
 
 def create_model(num_classes, weights, device):
     model = UNet(1, n_classes=num_classes, depth=4, n_filters=16)
+    
     if weights is not None:
-        loss_fn = nn.CrossEntropyLoss(torch.as_tensor(weights, device=device, dtype=torch.float))
+        loss_fn = FocalLoss(alpha=torch.as_tensor(weights, device=device, dtype=torch.float), gamma=2.0)
     else:
-        loss_fn = nn.CrossEntropyLoss() 
+        loss_fn = FocalLoss(gamma=2.0)
+    
     optim = torch.optim.Adam(model.parameters(), lr=1e-3)
     
     return model, loss_fn, optim
+
 
 def plot_loss_accuracy(train_losses, val_losses,
                        train_accs, val_accs,
