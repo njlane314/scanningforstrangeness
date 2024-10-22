@@ -76,9 +76,6 @@ def create_model(num_classes, weights, device):
     
     return model, loss_fn, optim
 
-import matplotlib.pyplot as plt
-import numpy as np
-
 def plot_loss_accuracy(train_losses, val_losses,
                        train_accs, val_accs,
                        train_dice_scores, val_dice_scores,
@@ -130,3 +127,21 @@ def plot_loss_accuracy(train_losses, val_losses,
     plt.tight_layout()
     plt.savefig(f"{output_dir}/training_validation_iou.png")
     plt.close()
+
+def plot_loss(metrics):
+    steps = np.arange(len(metrics['train_losses']))
+
+    plt.figure(figsize=(8, 6))
+    
+    plt.plot(steps, metrics['train_losses'], color='blue', label='Training loss', alpha=0.8)
+
+    plt.plot(steps, metrics['valid_losses'], color='red', label='Test loss', alpha=0.8)
+
+    plt.fill_between(steps, np.array(metrics['train_losses']) - 0.05, np.array(metrics['train_losses']) + 0.05, color='blue', alpha=0.2)
+    plt.fill_between(steps, np.array(metrics['valid_losses']) - 0.05, np.array(metrics['valid_losses']) + 0.05, color='red', alpha=0.2)
+    plt.xlabel('Step')
+    plt.ylabel('Loss')
+    plt.title('Training and Test Loss Over Steps')
+
+    plt.legend()
+    plt.show()

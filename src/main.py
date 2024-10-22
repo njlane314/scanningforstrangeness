@@ -3,7 +3,7 @@ import os
 import argparse
 from tqdm import tqdm
 from dataset import SegmentationDataLoader
-from utils import set_seed, create_model, get_class_weights, load_model, save_model
+from utils import set_seed, create_model, get_class_weights, load_model, save_model, plot_loss
 import numpy as np
 
 def train_model(args):
@@ -80,7 +80,7 @@ def train_model(args):
                 metrics['valid_losses'].append(val_loss.item())
                 print(f"[Step {step}] Val Loss: {val_loss.item():.4f}")
 
-    return model
+    return model, metrics
 
 def trace_model(args, best_val_model):
     device = torch.device('cpu')
@@ -120,5 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output_dir", type=str, default="outputs")
     args = parser.parse_args()
 
-    val_model = train_model(args)
+    val_model, metrics = train_model(args)
     #trace_model(args, val_model)
+
+    plot_loss(metrics)
