@@ -91,6 +91,19 @@ class SegmentationDataLoader():
         self.train_dl = DataLoader(self.train_ds, batch_size=batch_size, shuffle=True, drop_last=True, num_workers=0)
         self.valid_dl = DataLoader(self.valid_ds, batch_size=batch_size, shuffle=False, drop_last=True, num_workers=0)
 
+    def count_classes(self, num_classes):
+        count = np.zeros(num_classes)
+        for batch in tqdm(self.train_dl, desc="Counting Classes"):
+            _, truth = batch
+            unique = torch.unique(truth)
+            counts = torch.stack([(truth == x_u).sum() for x_u in unique])
+            unique = [u.item() for u in unique]
+            counts = [c.item() for c in counts]
+            this_dict = dict(zip(unique, counts))
+            for key in this_dict:
+                count[key] += this_dict[key]
+        return count
+
     def find_max_value(self):
         max_value = -float('inf')
         for batch in tqdm(self.train_dl, desc="Finding max value"):
