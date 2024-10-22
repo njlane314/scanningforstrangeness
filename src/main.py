@@ -68,8 +68,9 @@ def train_model(args):
 
         if (epoch_val_loss / num_val_batches) < best_val_loss:
             best_val_loss = epoch_val_loss / num_val_batches
-            best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best.pt"
-            save_model(model, x, best_val_model)
+            best_val_model = f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/{args.model_name}_best"
+            print(f"Saving model to: {best_val_model}.pt")  
+            save_model(model, x, best_val_model)  
 
     plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, args.n_epochs, args.output_dir)
     
