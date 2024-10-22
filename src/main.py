@@ -54,7 +54,7 @@ def train_model(args):
             loss = loss_fn(pred, y)
 
             loss.backward()
-            optim.train_step()
+            optim.step()
 
             #for name, param in model.named_parameters():
             #    if param.grad is None:
