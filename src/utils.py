@@ -102,6 +102,11 @@ def create_model(num_classes, weights, device):
     return model, loss_fn, optim
 
 
+import os
+import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm, ListedColormap, BoundaryNorm
+import torch
+
 def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_classes=4):
     model.eval()
     samples = 0
@@ -117,32 +122,42 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
             preds = preds.cpu()
 
             for i in range(min(num_samples, x.size(0))):
-                input_img = x[i].squeeze(0)
+                input_img = x[i].squeeze(0)  
                 ground_truth = y[i]
                 prediction = preds[i]
 
-                fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+                fig, ax = plt.subplots(1, 3, figsize=(18, 6))
 
-                ax[0].imshow(input_img, cmap='gray')
-                ax[0].set_title('Input Image')
+                input_img[input_img < 1e3] = 1e3
+                ax[0].imshow(input_img, cmap='jet', norm=LogNorm(vmin=1e3), aspect='equal', interpolation='none')
+                ax[0].set_title('Input Image (Log Scale)')
                 ax[0].axis('off')
+                cbar_input = fig.colorbar(ax[0].images[0], ax=ax[0])
+                cbar_input.set_label("Charge")
 
-                ax[1].imshow(ground_truth, cmap='jet', vmin=0, vmax=num_classes - 1)
+                cmap = ListedColormap(['white', 'red', 'blue', 'cyan', 'green', 'yellow', 'purple'])
+                bounds = np.arange(0, num_classes + 1)
+                norm = BoundaryNorm(bounds, cmap.N)
+                masked_ground_truth = np.ma.masked_invalid(ground_truth)
+                ax[1].imshow(masked_ground_truth, cmap=cmap, norm=norm, aspect='equal', interpolation='none')
                 ax[1].set_title('Ground Truth')
                 ax[1].axis('off')
 
-                ax[2].imshow(prediction, cmap='jet', vmin=0, vmax=num_classes - 1)
+                masked_prediction = np.ma.masked_invalid(prediction)
+                ax[2].imshow(masked_prediction, cmap=cmap, norm=norm, aspect='equal', interpolation='none')
                 ax[2].set_title('Prediction')
                 ax[2].axis('off')
 
                 plt.tight_layout()
-                plt.savefig(f"{output_dir}/prediction_sample_{samples}.png")
+                os.makedirs(output_dir, exist_ok=True)
+                plt.savefig(f"{output_dir}/prediction_sample_{samples}.png", dpi=300)
                 plt.close()
 
                 samples += 1
 
             if samples >= num_samples:
                 break
+
 
 
 def plot_loss_accuracy(train_losses, val_losses,
