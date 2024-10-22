@@ -47,10 +47,12 @@ def train_model(args):
             loss.backward()
             optim.step()
 
+            pred_classes = torch.argmax(pred, dim=1)
+
             metrics['train_losses'].append(loss.item())
-            metrics['train_accs'].append(accuracy(pred, y).cpu().numpy())
-            metrics['train_dice_scores'].append(dice_coefficient(pred, y).cpu().numpy())
-            metrics['train_iou_scores'].append(intersection_over_union(pred, y).cpu().numpy())
+            metrics['train_accs'].append(accuracy(pred_classes, y).cpu().numpy())
+            metrics['train_dice_scores'].append(dice_coefficient(pred_classes, y).cpu().numpy())
+            metrics['train_iou_scores'].append(intersection_over_union(pred_classes, y).cpu().numpy())
 
             print(f"[Step {step}] Train Loss: {loss.item():.4f}, Accuracy: {metrics['train_accs'][-1]:.4f}, Dice: {metrics['train_dice_scores'][-1]:.4f}, IoU: {metrics['train_iou_scores'][-1]:.4f}")
             step += 1 
@@ -64,12 +66,12 @@ def train_model(args):
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
 
-                print(f"Prediction shape: {pred.shape}, Label shape: {y.shape}")
-
+                pred_classes = torch.argmax(pred, dim=1)
+                
                 metrics['val_losses'].append(val_loss.item())
-                metrics['val_accs'].append(accuracy(pred, y).cpu().numpy())
-                metrics['val_dice_scores'].append(dice_coefficient(pred, y).cpu().numpy())
-                metrics['val_iou_scores'].append(intersection_over_union(pred, y).cpu().numpy())
+                metrics['val_accs'].append(accuracy(pred_classes, y).cpu().numpy())
+                metrics['val_dice_scores'].append(dice_coefficient(pred_classes, y).cpu().numpy())
+                metrics['val_iou_scores'].append(intersection_over_union(pred_classes, y).cpu().numpy())
 
                 print(f"[Step {step}] Val Loss: {val_loss.item():.4f}, Accuracy: {metrics['val_accs'][-1]:.4f}, Dice: {metrics['val_dice_scores'][-1]:.4f}, IoU: {metrics['val_iou_scores'][-1]:.4f}")
 
