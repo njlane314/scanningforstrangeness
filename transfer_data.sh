@@ -22,4 +22,3 @@ for FILE in "${FILES[@]}"; do
 done
 
 echo "All transfers complete."
-

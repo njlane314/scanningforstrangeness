@@ -42,25 +42,18 @@ def parse_data(data):
         n_hits = int(data[0])
         n_flags = int(data[1])
 
-        print(f"Number of hits: {n_hits}, Number of flags: {n_flags}")
-
         x_vtx = float(data[2])
         z_vtx = float(data[3])
-        print(f"Vertex: x = {x_vtx}, z = {z_vtx}")
 
         evt_drift_min, evt_drift_max = float(data[4]), float(data[5])
         evt_wire_min, evt_wire_max = float(data[6]), float(data[7])
         intr_drift_min, intr_drift_max = float(data[8]), float(data[9])
         intr_wire_min, intr_wire_max = float(data[10]), float(data[11])
 
-        print(f"Event extent: drift_min = {evt_drift_min}, drift_max = {evt_drift_max}, wire_min = {evt_wire_min}, wire_max = {evt_wire_max}")
-        print(f"Interaction extent: drift_min = {intr_drift_min}, drift_max = {intr_drift_max}, wire_min = {intr_wire_min}, wire_max = {intr_wire_max}")
-
         hit_data_start_index = 12
         hit_data = data[hit_data_start_index:]
 
         expected_length = n_hits * (3 + n_flags)
-        print(f"Hit data length: {len(hit_data)}, Expected length: {expected_length}")
 
         if len(hit_data) < expected_length:
             raise ValueError("Inconsistent hit data length")
@@ -69,11 +62,9 @@ def parse_data(data):
         hit_z = np.array(hit_data[1::(3 + n_flags)], dtype=float)
         hit_adc = np.array(hit_data[2::(3 + n_flags)], dtype=float)
 
-        print(f"Parsed hit data: x = {hit_x[:5]}, z = {hit_z[:5]}, adc = {hit_adc[:5]}")  
         hit_flags = []
         for i in range(n_flags):
             hit_flags.append(np.array(hit_data[(3 + i)::(3 + n_flags)], dtype=float))
-            print(f"Flag {i} data: {hit_flags[i][:5]}") 
 
         return (x_vtx, z_vtx, evt_drift_min, evt_drift_max, evt_wire_min, evt_wire_max,
                 intr_drift_min, intr_drift_max, intr_wire_min, intr_wire_max), (hit_x, hit_z, hit_adc, np.vstack(hit_flags).T)
@@ -81,7 +72,6 @@ def parse_data(data):
     except (ValueError, IndexError) as e:
         print(f"Error parsing event data: {e}")
         return None, None
-
 
 
 def process_event(data, output_folder, event_number, view, image_size):
@@ -116,10 +106,17 @@ def process_event(data, output_folder, event_number, view, image_size):
 def process_file(input_file, output_folder, view, image_size, num_events=None):
     with open(input_file, 'r') as f:
         reader = csv.reader(f)
+        total_events = sum(1 for row in reader)
+        f.seek(0) 
         for event_number, row in enumerate(reader):
             if num_events is not None and event_number >= num_events:
                 break 
             process_event(row, output_folder, event_number, view, image_size)
+
+            if (event_number + 1) % 10 == 0:
+                print(f"Processed {event_number + 1}/{total_events} events.")
+
+        print(f"Completed processing {min(event_number + 1, num_events or total_events)} events.")
 
 
 if __name__ == "__main__":
@@ -138,4 +135,3 @@ if __name__ == "__main__":
         os.makedirs(output_folder, exist_ok=True)
 
         process_file(input_file, output_folder, view, image_size=tuple(args.image_size), num_events=args.num_events)
-
