@@ -49,27 +49,31 @@ def create_model(num_classes, weights, device):
 
 def plot_loss_accuracy(train_losses, val_losses, train_accs, val_accs, n_epochs, output_dir):
     epochs = np.arange(1, n_epochs + 1)
-    
-    plt.figure(figsize=(12, 6))
-    plt.plot(epochs, train_losses, label='Training Loss', color='blue', marker='o')
-    plt.plot(epochs, val_losses, label='Validation Loss', color='red', marker='o')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.title('Training and Validation Loss')
-    plt.legend(loc='upper right')
-    plt.grid(True)
-    plt.savefig(f"{output_dir}/loss_plot.png")
-    plt.close()
 
-    plt.figure(figsize=(12, 6))
+    train_losses = torch.tensor(train_losses).cpu().numpy()
+    val_losses = torch.tensor(val_losses).cpu().numpy()
+    train_accs = torch.tensor(train_accs).cpu().numpy()
+    val_accs = torch.tensor(val_accs).cpu().numpy()
+
+    plt.figure(figsize=(12, 8))
+    plt.subplot(2, 1, 1)
+    plt.plot(epochs, train_losses, label='Training Loss', color='blue', marker='o')
+    plt.plot(epochs, val_losses, label='Validation Loss', color='orange', marker='o')
+    plt.title('Training and Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+
+    plt.subplot(2, 1, 2)
     plt.plot(epochs, train_accs, label='Training Accuracy', color='blue', marker='o')
-    plt.plot(epochs, val_accs, label='Validation Accuracy', color='red', marker='o')
-    plt.xlabel('Epochs')
-    plt.ylabel('Accuracy')
+    plt.plot(epochs, val_accs, label='Validation Accuracy', color='orange', marker='o')
     plt.title('Training and Validation Accuracy')
-    plt.legend(loc='lower right')
-    plt.grid(True)
-    plt.savefig(f"{output_dir}/accuracy_plot.png")
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.savefig(f"{output_dir}/loss_accuracy_plot.png")
     plt.close()
 
 def plot_class_performance(iou_scores, dice_scores, class_names, n_epochs, output_dir):
