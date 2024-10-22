@@ -107,6 +107,11 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm, ListedColormap, BoundaryNorm
 import torch
 
+import os
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap, BoundaryNorm
+import torch
+
 def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_classes=4):
     model.eval()
     samples = 0
@@ -122,14 +127,14 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
             preds = preds.cpu()
 
             for i in range(min(num_samples, x.size(0))):
-                input_img = x[i].squeeze(0) 
+                input_img = x[i].squeeze(0)  
                 ground_truth = y[i]
                 prediction = preds[i]
 
                 fig, ax = plt.subplots(1, 3, figsize=(18, 6))
 
-                ax[0].imshow(input_img, cmap='gray', aspect='equal', interpolation='none')
-                ax[0].set_title('Input Image')
+                ax[0].imshow(input_img, cmap='jet', aspect='equal', interpolation='none')
+                ax[0].set_title('Input Image (Jet)')
                 ax[0].axis('off')
 
                 cmap = ListedColormap(['white', 'red', 'blue', 'cyan', 'green', 'yellow', 'purple'])
@@ -154,7 +159,6 @@ def visualise_predictions(model, loader, device, output_dir, num_samples=3, num_
 
             if samples >= num_samples:
                 break
-
 
 
 def plot_loss_accuracy(train_losses, val_losses,
