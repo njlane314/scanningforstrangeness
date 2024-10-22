@@ -8,7 +8,7 @@ from torch.cuda.amp import autocast, GradScaler
 import numpy as np
 
 def train_model(args):
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
     
     os.makedirs(f"{args.output_dir}/models/pass{args.vertex_pass}/{args.view}/", exist_ok=True)
@@ -20,9 +20,10 @@ def train_model(args):
 
     model, loss_fn, optim = create_model(args.num_classes, weights, device)
     model = model.to(device)
-    scaler = GradScaler()
-
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=3, verbose=True)
+    
+    scaler = GradScaler()  
+    
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=3)
 
     train_losses, train_loss_std = [], []
     val_losses, val_loss_std = [], []
@@ -48,14 +49,14 @@ def train_model(args):
 
             optim.zero_grad()
 
-            with autocast():
+            with autocast():  
                 pred = model(x)
                 loss = loss_fn(pred, y)
 
-            scaler.scale(loss).backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            scaler.step(optim)
-            scaler.update()
+            scaler.scale(loss).backward() 
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) 
+            scaler.step(optim)  
+            scaler.update()  
 
             batch_train_losses.append(loss.item())
             batch_train_accs.append(accuracy(pred, y))
