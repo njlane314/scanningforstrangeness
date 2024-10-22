@@ -41,8 +41,8 @@ def train_model(args):
             x, y = batch
             x, y = x.to(device), y.to(device)
 
-            #print(f"Input data range: {x.min().item()} to {x.max().item()}")
-            #print(f"Label data range: {y.min().item()} to {y.max().item()}")
+            print(f"Input data range: {x.min().item()} to {x.max().item()}")
+            print(f"Label data range: {y.min().item()} to {y.max().item()}")
 
             y = y.to(torch.long)
 
@@ -72,8 +72,8 @@ def train_model(args):
                 x, y = batch
                 x, y = x.to(device), y.to(device)
 
-                #print(f"Input data range: {x.min().item()} to {x.max().item()}")
-                #print(f"Label data range: {y.min().item()} to {y.max().item()}")
+                print(f"Input data range: {x.min().item()} to {x.max().item()}")
+                print(f"Label data range: {y.min().item()} to {y.max().item()}")
 
                 pred = model(x)
                 val_loss = loss_fn(pred, y)
