@@ -22,8 +22,8 @@ from sklearn.metrics import precision_score, recall_score
 
 def create_model(n_classes, weights, device):
     model = UNet(1, n_classes=n_classes, depth=4, n_filters=16)
-    #loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32, device=device))
-    loss_fn = FocalLoss(alpha=torch.tensor(weights, dtype=torch.float32, device=device), gamma=3, reduction='mean')
+    loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32, device=device))
+    #loss_fn = FocalLoss(alpha=torch.tensor(weights, dtype=torch.float32, device=device), gamma=3, reduction='mean')
     optim = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
     return model, loss_fn, optim
 
