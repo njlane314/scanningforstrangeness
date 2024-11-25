@@ -10,6 +10,7 @@ import uproot
 import argparse
 from datetime import datetime
 from tqdm import tqdm 
+import random
 
 from lib.dataset import ImageDataLoader
 from lib.model import UNet
@@ -21,7 +22,8 @@ from sklearn.metrics import precision_score, recall_score
 
 def create_model(n_classes, weights, device):
     model = UNet(1, n_classes=n_classes, depth=4, n_filters=16)
-    loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32, device=device))
+    #loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(weights, dtype=torch.float32, device=device))
+    loss_fn = FocalLoss(alpha=torch.tensor(weights, dtype=torch.float32, device=device), gamma=3, reduction='mean')
     optim = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
     return model, loss_fn, optim
 
@@ -97,130 +99,66 @@ def train(config):
     model, loss_fn, optim = create_model(n_classes, class_weights, device)
     model = model.to(device)
     scaler = torch.cuda.amp.GradScaler()
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=3)
+    #scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optim, mode='min', factor=0.1, patience=3)
 
-    train_losses, train_loss_stds = [], []
-    valid_signature_losses, valid_signature_loss_stds = [], []
-    valid_background_losses, valid_background_loss_stds = [], []
-    learning_rates = []
-    signature_metrics, background_metrics = [], []
+    train_losses = []
+    valid_losses = []
 
     output_path = os.path.join(output_dir, f"{model_name}_metrics.root")
     with uproot.recreate(output_path) as output:
         print("\033[34m-- Starting training loop\033[0m")
-        with torch.autograd.set_detect_anomaly(True):
-            for epoch in range(n_epochs):
-                model.train()
-                print(f"\033[34m-- Epoch {epoch+1}/{n_epochs} started\033[0m")
 
-                batch_train_loss = []
-                for i, batch in enumerate(tqdm(data_loader.train_dl, desc=f"Training Epoch {epoch+1}")):
-                    x, y = batch
-                    x, y = x.to(device), y.to(device)
+        train_loss = []
+        valid_loss = []
+        for epoch in range(n_epochs):
+            model.train()
+            epoch_train_loss = []
+            epoch_valid_loss = []
+            
+            for i, batch in enumerate(tqdm(data_loader.train_dl, desc=f"Training Epoch {epoch+1}")):
+                x, y = batch
+                x, y = x.to(device), y.to(device)
 
-                    y = y.to(torch.long)
-                    optim.zero_grad()
+                y = y.to(torch.long)
+                optim.zero_grad()
 
-                    pred = model(x)
-                    loss = loss_fn(pred, y)
+                pred = model(x)
+                loss = loss_fn(pred, y)
                         
-                    loss.backward()
-                    optim.step()
+                loss.backward()
+                optim.step()
 
-                    batch_train_loss.append(loss.item())
-                    tqdm.write(f"\033[34m--- Epoch {epoch+1}, Batch {i+1} - Training Loss: {loss.item()}\033[0m")
-
-                train_loss_mean = np.mean(batch_train_loss)
-                train_loss_std_dev = np.std(batch_train_loss)
-                print(f"Epoch {epoch+1} - Mean Training Loss: {train_loss_mean}, Std Dev: {train_loss_std_dev}")
-
-                train_losses.append(train_loss_mean)
-                train_loss_stds.append(train_loss_std_dev)
+                train_loss.append(loss.item())
+                tqdm.write(f"\033[34m--- Epoch {epoch+1}, Batch {i+1} - Training Loss: {loss.item()}\033[0m")
 
                 model.eval()
-                signature_loss = []
-                signature_acc, signature_precision, signature_recall = [], [], []
                 with torch.no_grad():
-                    for batch in tqdm(data_loader.valid_signature_dl, desc=f"Signature Validation Epoch {epoch+1}"):
-                        x, y = batch
-                        x, y = x.to(device), y.to(device)
+                    valid_iterator = iter(data_loader.valid_signature_dl)
+                    try:
+                        random_val_batch = next(valid_iterator) 
+                    except StopIteration:
+                        valid_iterator = iter(data_loader.valid_signature_dl)
+                        random_val_batch = next(valid_iterator)
 
-                        pred = model(x)
-                        val_loss = loss_fn(pred, y)
-                        signature_loss.append(val_loss.item())
+                    val_x, val_y = random_val_batch
+                    val_x, val_y = val_x.to(device), val_y.to(device)
 
-                        acc, prec, rec = calculate_metrics(pred, y, n_classes)
-                        signature_acc.append(acc)
-                        signature_precision.append(prec)
-                        signature_recall.append(rec)
+                    val_pred = model(val_x)
+                    val_loss = loss_fn(val_pred, val_y)
 
-                valid_signature_loss_mean = np.mean(signature_loss)
-                valid_signature_loss_std = np.std(signature_loss)
-                valid_signature_losses.append(valid_signature_loss_mean)
-                valid_signature_loss_stds.append(valid_signature_loss_std)
-                print(f"Epoch {epoch+1} - Mean Signature Validation Loss: {valid_signature_loss_mean}, Std Dev: {valid_signature_loss_std}")
+                    valid_loss.append(val_loss.item())
+                    tqdm.write(f"\033[34m--- Epoch {epoch+1}, Batch {i+1} - Validation Loss (Random Batch): {val_loss.item()}\033[0m")
+            
+                model.train()
 
-                signature_metrics.append({
-                    "accuracy_mean": np.mean(signature_acc),
-                    "accuracy_std": np.std(signature_acc),
-                    "precision_mean": np.mean(signature_precision),
-                    "precision_std": np.std(signature_precision),
-                    "recall_mean": np.mean(signature_recall),
-                    "recall_std": np.std(signature_recall),
-                })
+            model_save_path = os.path.join(model_save_dir, f"{model_name}_epoch_{epoch+1}.pt")
+            torch.save(model.state_dict(), model_save_path)
+            print(f"\033[32m-- Model saved at {model_save_path}\033[0m")
 
-                background_loss = []
-                background_acc, background_precision, background_recall = [], [], []
-                with torch.no_grad():
-                    for batch in tqdm(data_loader.valid_background_dl, desc=f"Background Validation Epoch {epoch+1}"):
-                        x, y = batch
-                        x, y = x.to(device), y.to(device)
-
-                        pred = model(x)
-                        val_loss = loss_fn(pred, y)
-                        background_loss.append(val_loss.item())
-
-                        acc, prec, rec = calculate_metrics(pred, y, n_classes)
-                        background_acc.append(acc)
-                        background_precision.append(prec)
-                        background_recall.append(rec)
-
-                background_metrics.append({
-                    "accuracy_mean": np.mean(background_acc),
-                    "accuracy_std": np.std(background_acc),
-                    "precision_mean": np.mean(background_precision),
-                    "precision_std": np.std(background_precision),
-                    "recall_mean": np.mean(background_recall),
-                    "recall_std": np.std(background_recall),
-                })
-
-                valid_background_loss_mean = np.mean(background_loss)
-                valid_background_loss_std = np.std(background_loss)
-                valid_background_losses.append(valid_background_loss_mean)
-                valid_background_loss_stds.append(valid_background_loss_std)
-                print(f"Epoch {epoch+1} - Mean Background Validation Loss: {valid_background_loss_mean}, Std Dev: {valid_background_loss_std}")
-
-                avg_validation_loss = (valid_signature_loss_mean + valid_background_loss_mean) / 2
-                scheduler.step(avg_validation_loss)
-                current_lr = scheduler.get_last_lr()[0]
-                learning_rates.append(current_lr)
-                print(f"Epoch {epoch+1} - Current Learning Rate: {current_lr}")
-
-                model_save_path = os.path.join(model_save_dir, f"{model_name}_epoch_{epoch+1}.pt")
-                torch.save(model.state_dict(), model_save_path)
-                print(f"\033[32m-- Model saved at {model_save_path}\033[0m")
-
-            output["metrics"] = {
-                "train_loss": train_losses,
-                "train_loss_std": train_loss_stds,
-                "valid_signature_loss": valid_signature_losses,
-                "valid_signature_loss_std": valid_signature_loss_stds,
-                "valid_background_loss": valid_background_losses,
-                "valid_background_loss_std": valid_background_loss_stds,
-                "learning_rate": learning_rates,
-                "signature_metrics": signature_metrics,
-                "background_metrics": background_metrics,
-            }   
+        output["training"] = {
+            "train_loss": train_losses,
+            "valid_loss": valid_losses,
+        }
 
     print("\033[32m-- Training complete\033[0m")
 
