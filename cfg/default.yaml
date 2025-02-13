@@ -1,0 +1,21 @@
+train:
+  task: contrastive
+  epochs: 10
+  batch_size: 32
+  learning_rate: 0.001
+  checkpoint_dir: "./checkpoints"
+  temperature: 0.1
+
+model:
+  in_channels: 1
+  n_filters: 16
+  drop_prob: 0.1
+  feature_dim: 128
+
+dataset:
+  file_path: "/path/to/default/file.root"
+  tree_name: "imageanalyser/ImageTree"
+  width: 512
+  height: 512
+  plane_labels: ["U", "V", "W"]
+  induction_plane_index: 2
