@@ -92,7 +92,7 @@ class UResNet(nn.Module):
         self.us_dropout_3 = dropout(drop_prob)
         self.us_dropout_2 = dropout(drop_prob)
         self.us_dropout_1 = dropout(drop_prob)
-        self.output = nn.Sequential(nn.Conv2d(n_filters, n_classes, 1), Sigmoid(y_range))
+        self.output = nn.Conv2d(n_filters, n_classes, kernel_size=1)
     def forward(self, x):
         res = x
         res = self.ds_conv_1(res)
@@ -192,8 +192,7 @@ class EncodedClassifier(nn.Module):
             param.requires_grad = False
         agg_dim = feature_dim * self.num_planes
         self.fc1 = nn.Linear(agg_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 1)
-        
+        self.fc2 = nn.Linear(hidden_dim, 1)    
     def forward(self, x):
         batch_size, n_planes, C, H, W = x.size()
         assert n_planes == self.num_planes

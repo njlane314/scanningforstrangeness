@@ -2,74 +2,65 @@ import os
 import uproot
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 class BaseDataset(Dataset):
     def __init__(self, config):
-        self.file_path = config.get("dataset.file_path")
-        self.tree_name = config.get("dataset.tree_name")
-        self.width = config.get("dataset.width")
-        self.height = config.get("dataset.height")
-        self.plane_labels = config.get("dataset.plane_labels")
+        self.path = config.get("dataset.path")
+        self.tree = config.get("dataset.tree")
+        self.width = config.get("dataset.dims.width")
+        self.height = config.get("dataset.dims.height")
+        self.plane = config.get("dataset.planes")
         self._load_data()
-
     def _load_data(self):
-        if not os.path.exists(self.file_path):
-            raise FileNotFoundError(f"File not found: {self.file_path}")
-        self.root_file = uproot.open(self.file_path)
-        self.tree = self.root_file[self.tree_name]
+        if not os.path.exists(self.path):
+            raise FileNotFoundError(f"File not found: {self.path}")
+        self.root_file = uproot.open(self.path)
+        self.tree = self.root_file[self.tree]
         self.input_data = self.tree["input_data"].array(library="np")
         self.truth_data = self.tree["truth_data"].array(library="np")
         self.planes = self.tree["planes"].array(library="np")
         self.event_type = self.tree["event_type"].array(library="np")
-
     def __len__(self):
         return len(self.input_data)
 
 class SegmentationDataset(BaseDataset):
-    def __init__(self, config, plane_index=0):
+    def __init__(self, config):
         super().__init__(config)
-        self.plane_index = plane_index
-
+        self.seg_classes = config.get("model.seg_classes")
     def __getitem__(self, idx):
         event_input = self.input_data[idx]
         event_truth = self.truth_data[idx]
-        plane = event_input[self.plane_index]
-        label = event_truth[self.plane_index]
-        image = np.array(list(plane), dtype=np.float32).reshape(self.height, self.width)
-        target = np.array(list(label), dtype=np.float32).reshape(self.height, self.width)
-        image = torch.tensor(image).unsqueeze(0)
-        target = torch.tensor(target).unsqueeze(0)
-        return image, target
+        images = []
+        targets = []
+        for plane_idx in range(len(event_input)):
+            plane_vector = event_input[plane_idx]
+            label_vector = event_truth[plane_idx]
+            plane = np.fromiter(plane_vector, dtype=np.float32, count=self.width * self.height).reshape(self.height, self.width)
+            label = np.fromiter(label_vector, dtype=np.float32, count=self.width * self.height).reshape(self.height, self.width)
+            images.append(plane)
+            targets.append(label.astype(np.int64))
+        images_np = np.stack(images, axis=0)
+        targets_np = np.stack(targets, axis=0)
+        one_hot_targets = []
+        for plane_label in targets_np:
+            plane_tensor = torch.tensor(plane_label, dtype=torch.long)
+            one_hot = F.one_hot(plane_tensor, num_classes=self.seg_classes)
+            one_hot = one_hot.permute(2, 0, 1)
+            one_hot_targets.append(one_hot)
+        one_hot_targets = torch.cat(one_hot_targets, dim=0)
+        return torch.tensor(images_np), one_hot_targets
 
 class ContrastiveDataset(BaseDataset):
-    def __init__(self, config, background_only=True):
+    def __init__(self, config):
         super().__init__(config)
-        self.background_only = background_only
-        if self.background_only:
-            self.indices = self._filter_indices()
-        else:
-            self.indices = None
-
-    def _filter_indices(self):
-        indices = []
-        for i in range(len(self)):
-            if self.event_type[i] == "background":
-                indices.append(i)
-        return indices
-
     def __len__(self):
-        if self.indices is not None:
-            return len(self.indices)
-        return super().__len__()
-
+        return len(self.input_data)
     def __getitem__(self, idx):
-        real_idx = self.indices[idx] if self.indices is not None else idx
-        event_input = self.input_data[real_idx]
-        planes = []
-        for i in range(len(event_input)):
-            plane = event_input[i]
-            image = np.array(list(plane), dtype=np.float32).reshape(self.height, self.width)
-            image = torch.tensor(image).unsqueeze(0)
-            planes.append(image)
-        return torch.stack(planes, dim=0)
+        event_input = self.input_data[idx]
+        images = []
+        for plane in event_input:
+            image = np.fromiter(plane, dtype=np.float32, count=self.width * self.height).reshape(self.height, self.width)
+            images.append(image)
+        return torch.tensor(images)

@@ -1,0 +1,32 @@
+contrastive:
+  default: &contrastive_default
+    train:
+      task: contrastive
+      epochs: 10
+      batch_size: 16
+      learning_rate: 0.0005
+      checkpoint_dir: "./checkpoints/contrastive"
+      temperature: 0.07
+    model:
+      properties:
+        feature_dim: 256
+    dataset:
+      source:
+        file_path: "/data/dune/contrastive_training.root"
+      filters:
+        event_type: background
+
+  variants:
+    light:
+      <<: *contrastive_default
+      train:
+        batch_size: 8
+        learning_rate: 0.0003
+        temperature: 0.05
+    strong:
+      <<: *contrastive_default
+      train:
+        epochs: 15
+        batch_size: 32
+        learning_rate: 0.0008
+        temperature: 0.1

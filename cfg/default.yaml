@@ -1,21 +1,29 @@
 train:
-  task: contrastive
-  epochs: 10
-  batch_size: 32
-  learning_rate: 0.001
-  checkpoint_dir: "./checkpoints"
-  temperature: 0.1
+  objective: classification
+  num_epochs: 20
+  batch_size: 8
+  lr: 0.001
+  ckpt_dir: "./checkpoints"
+  temp: 0.1
 
 model:
-  in_channels: 1
-  n_filters: 16
-  drop_prob: 0.1
-  feature_dim: 128
+  arch: UResNetEncoder
+  in_channels: 3
+  num_classes: 6
+  seg_classes: 2
+  filters: 32
+  dropout: 0.1
+  feat_dim: 128
+  optimizer: Adam
+  weight_decay: 0.0001
 
 dataset:
-  file_path: "/path/to/default/file.root"
-  tree_name: "imageanalyser/ImageTree"
-  width: 512
-  height: 512
-  plane_labels: ["U", "V", "W"]
-  induction_plane_index: 2
+  path: "/gluster/data/dune/niclane/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_background_lambdamuon_ana.root"
+  tree: "imageanalyser/ImageTree"
+  dims:
+    width: 512
+    height: 512
+  planes: ["U", "V", "W"]
+  ind_plane_idx: 2
+  filters:
+    event_type: all
