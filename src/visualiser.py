@@ -1,72 +1,135 @@
-import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
+import matplotlib.patches as mpatches
+import numpy as np
+import random
 import torch
+from scipy.ndimage import gaussian_filter
 
 class Visualiser:
-    def __init__(self, dataset, planes=["U", "V", "W"], width=512, height=512):
-        self.dataset = dataset
-        self.planes = planes
-        self.width, self.height = width, height
-
-        try:
-            self.run_arr = self.dataset.tree["run"].array(library="np")
-            self.subrun_arr = self.dataset.tree["subrun"].array(library="np")
-            self.event_arr = self.dataset.tree["event"].array(library="np")
-        except Exception:
-            self.run_arr = self.subrun_arr = self.event_arr = None
-
-    def visualise_plane(self, idx, plane_idx, overlay=False, save=True, show=False):
-        if idx >= len(self.dataset):
-            print(f"Skipping event {idx}: Index out of range")
-            return
-
-        ev = self.dataset[idx]
-        if isinstance(ev, tuple):
-            img, truth = ev
-            if img.ndim == 4 and img.shape[1] == 1:
-                img = img.squeeze(1)
-            if truth.ndim == 4 and truth.shape[1] == 1:
-                truth = truth.squeeze(1)
-            img, truth = img.numpy(), truth.numpy()
-        else:
-            if ev.ndim == 4 and ev.shape[1] == 1:
-                ev = ev.squeeze(1)
-            img = ev.numpy()
-            truth = None
-
-        if self.run_arr is not None:
-            run = self.run_arr[idx]
-            subrun = self.subrun_arr[idx]
-            evt_num = self.event_arr[idx]
-        else:
-            run, subrun, evt_num = "Unknown", "Unknown", idx
-
-        print(f"Rendering Event {idx} | Plane {self.planes[plane_idx]} | Run {run}, Subrun {subrun}, Event {evt_num}")
-
-        fig, ax = plt.subplots(figsize=(12, 12), dpi=600)
-        plane_img = img[plane_idx]
-        norm = colors.PowerNorm(gamma=0.35, vmin=plane_img.min(), vmax=plane_img.max())
-        ax.imshow(plane_img, origin="lower", cmap="jet", norm=norm)
-        if overlay and truth is not None:
-            ax.imshow(truth[plane_idx], origin="lower", cmap="cool", alpha=0.4)
-
-        ax.set_xticks([0, self.width - 1])
-        ax.set_yticks([0, self.height - 1])
-        ax.tick_params(axis="both", direction="out", length=6, width=1.5, labelsize=18)
-        ax.set_xlim(0, self.width - 1)
-        ax.set_ylim(0, self.height - 1)
-        ax.set_xlabel("Local Wire Coord", fontsize=20)
-        ax.set_ylabel("Local Drift Time", fontsize=20)
-        ax.set_title(f"Plane {self.planes[plane_idx]} (Run {run}, Subrun {subrun}, Event {evt_num})", fontsize=22)
-
-        plt.tight_layout()
-        if save:
-            plt.savefig(f"event_{run}_{subrun}_{evt_num}_plane_{self.planes[plane_idx]}.png")
-        if show:
-            plt.show()
-        plt.close(fig)
-
-    def visualise_event_planes(self, idx, overlay=False, save=True, show=False):
-        for i in range(len(self.planes)):
-            self.visualise_plane(idx, plane_idx=i, overlay=overlay, save=save, show=show)
+    def __init__(self, config):
+        self.seg_classes = config.get("model.seg_classes")
+        self.width = config.get("dataset.dims.width")
+        self.height = config.get("dataset.dims.height")
+    def visualise_input_event(self, dataset):
+        idx = random.randint(0, len(dataset) - 1)
+        event_data = dataset[idx]
+        input_img, _, r, sr, evnum = event_data
+        planes = ["U", "V", "W"][:input_img.shape[0]]
+        for i in range(input_img.shape[0]):
+            fig, ax = plt.subplots(figsize=(12, 12), dpi=600)
+            ax.imshow(input_img[i],
+                      origin="lower",
+                      cmap="jet",
+                      norm=colors.PowerNorm(gamma=0.35, vmin=input_img.min(), vmax=input_img.max()))
+            ax.set_xticks([0, self.width - 1])
+            ax.set_yticks([0, self.height - 1])
+            ax.tick_params(axis="both", direction="out", length=6, width=1.5, labelsize=18)
+            ax.set_xlim(0, self.width - 1)
+            ax.set_ylim(0, self.height - 1)
+            ax.set_xlabel("Local Drift Time", fontsize=20)
+            ax.set_ylabel("Local Wire Coord", fontsize=20)
+            ax.set_title(f"Plane {planes[i]} (Run {r}, Subrun {sr}, Event {evnum})", fontsize=22)
+            plt.tight_layout()
+            plt.savefig(f"event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
+            plt.close(fig)
+    def visualise_truth_event(self, dataset):
+        idx = random.randint(0, len(dataset) - 1)
+        event_data = dataset[idx]
+        _, truth_img, r, sr, evnum = event_data
+        num_planes = truth_img.shape[0] // self.seg_classes
+        planes = ["U", "V", "W"][:num_planes]
+        for i in range(num_planes):
+            if torch.is_tensor(truth_img):
+                plane_truth = truth_img[i * self.seg_classes:(i + 1) * self.seg_classes]
+                seg_mask = plane_truth.argmax(dim=0).cpu().numpy()
+            else:
+                plane_truth = truth_img[i * self.seg_classes:(i + 1) * self.seg_classes]
+                seg_mask = plane_truth.argmax(axis=0)
+            fig, ax = plt.subplots(figsize=(12, 12), dpi=600)
+            im = ax.imshow(seg_mask,
+                           origin="lower",
+                           cmap="tab10",
+                           interpolation="nearest")
+            ax.set_xticks([0, self.width - 1])
+            ax.set_yticks([0, self.height - 1])
+            ax.tick_params(axis="both", direction="out", length=6, width=1.5, labelsize=18)
+            ax.set_xlim(0, self.width - 1)
+            ax.set_ylim(0, self.height - 1)
+            ax.set_xlabel("Local Drift Time", fontsize=20)
+            ax.set_ylabel("Local Wire Coord", fontsize=20)
+            ax.set_title(f"Plane {planes[i]} (Run {r}, Subrun {sr}, Event {evnum})", fontsize=22)
+            plt.colorbar(im, ax=ax)
+            plt.tight_layout()
+            plt.savefig(f"truth_event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
+            plt.close(fig)
+    def visualise_overlay_event(self, dataset):
+        idx = random.randint(0, len(dataset) - 1)
+        event_data = dataset[idx]
+        input_img, truth_img, r, sr, evnum = event_data
+        planes = ["U", "V", "W"][:input_img.shape[0]]
+        custom_overlay_colors = {
+            1: "#FF00FF",  # Magenta
+            2: "#FF0000",   # Red
+            3: "#FFFF00",  # Yellow
+            4: "#00FF00",  # Lime Green
+            5: "#FFA500",  # Orange
+            6: "#00FFFF"  # Cyan
+        }
+        class_colors = []
+        for c in range(self.seg_classes):
+            if c == 0:
+                class_colors.append((0, 0, 0, 0))
+            else:
+                hex_color = custom_overlay_colors.get(c, "#FFFFFF")
+                class_colors.append(colors.to_rgba(hex_color, alpha=1.0))
+        legend_labels = {
+            1: r"$\mathrm{Noise}$",
+            2: r"$\mathrm{Primary\ Muon}$",
+            3: r"$\mathrm{Charged\ Kaon}$",
+            4: r"$\mathrm{Kaon\ Short}$",
+            5: r"$\mathrm{Lambda}$",
+            6: r"$\mathrm{Charged\ Sigma}$"
+        }
+        for i in range(input_img.shape[0]):
+            if torch.is_tensor(truth_img):
+                plane_truth = truth_img[i * self.seg_classes:(i + 1) * self.seg_classes]
+                seg_mask = plane_truth.argmax(dim=0).cpu().numpy()
+            else:
+                plane_truth = truth_img[i * self.seg_classes:(i + 1) * self.seg_classes]
+                seg_mask = plane_truth.argmax(axis=0)
+            fig, ax = plt.subplots(figsize=(12, 12), dpi=600)
+            ax.imshow(input_img[i],
+                      origin="lower",
+                      cmap="jet",
+                      norm=colors.PowerNorm(gamma=0.35,
+                                            vmin=input_img.min(),
+                                            vmax=input_img.max()))
+            class_colors_arr = np.array(class_colors)  
+            overlay = class_colors_arr[seg_mask].copy()  
+            overlay[..., 3] = np.where(seg_mask != 0, 0.5, 0.0)
+            ax.imshow(overlay, origin="lower", interpolation="nearest")
+            legend_items = []
+            for c in range(self.seg_classes):
+                if np.any(seg_mask == c) and c != 0:
+                    marker = mpatches.Circle((0, 0), radius=5,
+                                             facecolor=class_colors[c],
+                                             linewidth=0)
+                    legend_items.append((marker, legend_labels.get(c, str(c))))
+            if legend_items:
+                handles, labels = zip(*legend_items)
+                legend = ax.legend(handles, labels, loc='upper left', fontsize=18, frameon=False,
+                                   handlelength=1.5, handletextpad=0.5, labelspacing=0.5)
+                for text in legend.get_texts():
+                    text.set_color("white")
+            ax.set_xticks([0, self.width - 1])
+            ax.set_yticks([0, self.height - 1])
+            ax.tick_params(axis="both", direction="out", length=6, width=1.5, labelsize=18)
+            ax.set_xlim(0, self.width - 1)
+            ax.set_ylim(0, self.height - 1)
+            ax.set_xlabel("Local Drift Time", fontsize=20)
+            ax.set_ylabel("Local Wire Coord", fontsize=20)
+            ax.set_title(f"Plane {planes[i]} (Run {r}, Subrun {sr}, Event {evnum})", fontsize=22)
+            plt.tight_layout()
+            plt.savefig(f"overlay_event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
+            plt.close(fig)

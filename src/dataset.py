@@ -18,10 +18,15 @@ class BaseDataset(Dataset):
             raise FileNotFoundError(f"File not found: {self.path}")
         self.root_file = uproot.open(self.path)
         self.tree = self.root_file[self.tree]
+        self.run = self.tree["run"].array(library="np")
+        self.subrun = self.tree["subrun"].array(library="np")
+        self.event = self.tree["event"].array(library="np")
+        self.type = self.tree["event_type"].array(library="np")
+        self.planes = self.tree["planes"].array(library="np")
+        #self.width = self.tree["width"].array(library="np")
+        #self.height = self.tree["height"].array(library="np")
         self.input_data = self.tree["input_data"].array(library="np")
         self.truth_data = self.tree["truth_data"].array(library="np")
-        self.planes = self.tree["planes"].array(library="np")
-        self.event_type = self.tree["event_type"].array(library="np")
     def __len__(self):
         return len(self.input_data)
 
@@ -30,13 +35,16 @@ class SegmentationDataset(BaseDataset):
         super().__init__(config)
         self.seg_classes = config.get("model.seg_classes")
     def __getitem__(self, idx):
-        event_input = self.input_data[idx]
-        event_truth = self.truth_data[idx]
+        run = self.run[idx] 
+        subrun = self.subrun[idx] 
+        event = self.event[idx]
+        input = self.input_data[idx]
+        truth = self.truth_data[idx]
         images = []
         targets = []
-        for plane_idx in range(len(event_input)):
-            plane_vector = event_input[plane_idx]
-            label_vector = event_truth[plane_idx]
+        for plane_idx in range(len(input)):
+            plane_vector = input[plane_idx]
+            label_vector = truth[plane_idx]
             plane = np.fromiter(plane_vector, dtype=np.float32, count=self.width * self.height).reshape(self.height, self.width)
             label = np.fromiter(label_vector, dtype=np.float32, count=self.width * self.height).reshape(self.height, self.width)
             images.append(plane)
@@ -50,7 +58,7 @@ class SegmentationDataset(BaseDataset):
             one_hot = one_hot.permute(2, 0, 1)
             one_hot_targets.append(one_hot)
         one_hot_targets = torch.cat(one_hot_targets, dim=0)
-        return torch.tensor(images_np), one_hot_targets
+        return torch.tensor(images_np), one_hot_targets, run, subrun, event
 
 class ContrastiveDataset(BaseDataset):
     def __init__(self, config):
@@ -58,9 +66,9 @@ class ContrastiveDataset(BaseDataset):
     def __len__(self):
         return len(self.input_data)
     def __getitem__(self, idx):
-        event_input = self.input_data[idx]
+        input = self.input_data[idx]
         images = []
-        for plane in event_input:
+        for plane in input:
             image = np.fromiter(plane, dtype=np.float32, count=self.width * self.height).reshape(self.height, self.width)
             images.append(image)
         return torch.tensor(images)

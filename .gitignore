@@ -39,3 +39,6 @@ __pycache__/
 *.root
 
 logs/
+checkpoints/
+*.pth
+out/
