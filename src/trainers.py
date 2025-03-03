@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
-from src.models import UResNet, ResNetEncoder
+from src.models import UResNetFull, UResNetEncoder
 
 class BaseTrainer:
     def __init__(self, config, model, dataloader, optimizer, criterion):

@@ -1,3 +1,4 @@
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.patches as mpatches
@@ -5,14 +6,20 @@ import numpy as np
 import random
 import torch
 from scipy.ndimage import gaussian_filter
+mpl.rcParams['text.usetex'] = True
 
 class Visualiser:
     def __init__(self, config):
         self.seg_classes = config.get("model.seg_classes")
-        self.width = config.get("dataset.dims.width")
-        self.height = config.get("dataset.dims.height")
+        self.width = config.get("dataset.width")
+        self.height = config.get("dataset.height")
+    def _get_random(self, dataset):
+        sig = [i for i, t in enumerate(dataset.type) if t == 0]
+        if not sig:
+            return random.choice(dataset)
+        return random.choice(sig)
     def visualise_input_event(self, dataset):
-        idx = random.randint(0, len(dataset) - 1)
+        idx = self._get_random(dataset)
         event_data = dataset[idx]
         input_img, _, r, sr, evnum = event_data
         planes = ["U", "V", "W"][:input_img.shape[0]]
@@ -34,7 +41,7 @@ class Visualiser:
             plt.savefig(f"event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
             plt.close(fig)
     def visualise_truth_event(self, dataset):
-        idx = random.randint(0, len(dataset) - 1)
+        idx = self._get_random(dataset)
         event_data = dataset[idx]
         _, truth_img, r, sr, evnum = event_data
         num_planes = truth_img.shape[0] // self.seg_classes
@@ -64,17 +71,17 @@ class Visualiser:
             plt.savefig(f"truth_event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
             plt.close(fig)
     def visualise_overlay_event(self, dataset):
-        idx = random.randint(0, len(dataset) - 1)
+        idx = self._get_random(dataset)
         event_data = dataset[idx]
         input_img, truth_img, r, sr, evnum = event_data
         planes = ["U", "V", "W"][:input_img.shape[0]]
         custom_overlay_colors = {
-            1: "#FF00FF",  # Magenta
-            2: "#FF0000",   # Red
+            1: "#00FFFF", # Cyan
+            2: "#FF00FF",  # Magenta
             3: "#FFFF00",  # Yellow
             4: "#00FF00",  # Lime Green
             5: "#FFA500",  # Orange
-            6: "#00FFFF"  # Cyan
+            6: "#FF0000"   # Red
         }
         class_colors = []
         for c in range(self.seg_classes):
@@ -84,12 +91,12 @@ class Visualiser:
                 hex_color = custom_overlay_colors.get(c, "#FFFFFF")
                 class_colors.append(colors.to_rgba(hex_color, alpha=1.0))
         legend_labels = {
-            1: r"$\mathrm{Noise}$",
-            2: r"$\mathrm{Primary\ Muon}$",
-            3: r"$\mathrm{Charged\ Kaon}$",
-            4: r"$\mathrm{Kaon\ Short}$",
-            5: r"$\mathrm{Lambda}$",
-            6: r"$\mathrm{Charged\ Sigma}$"
+            1: r"$\text{Noise}$",
+            2: r"$\mu$",                   # Muon
+            3: r"$K^{\pm}$",               # Charged Kaon
+            4: r"$K^{0}_{S}$",             # Kaon Short
+            5: r"$\Lambda$",               # Lambda
+            6: r"$\Sigma^{\pm}$"           # Charged Sigma
         }
         for i in range(input_img.shape[0]):
             if torch.is_tensor(truth_img):

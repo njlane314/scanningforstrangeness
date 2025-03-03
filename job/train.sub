@@ -1,0 +1,13 @@
+executable      = bin/train.sh
+request_memory  = 16G
+request_cpus    = 4
+request_gpus    = 1
+request_disk    = 20G
+initialdir      = $ENV(HOME)/scripts
+output          = out/train/train-$(Process).out
+error           = out/train/train-$(Process).err
+log             = out/train/train-$(Process).log
+arguments       = $(Process)
+should_transfer_files = yes
+when_to_transfer_output = ON_EXIT
+queue 1

@@ -14,6 +14,7 @@ def reinit_layer(layer, leak=0.0, use_kaiming_normal=True):
             nn.init.kaiming_normal_(layer.weight, a=leak)
         else:
             nn.init.kaiming_uniform_(layer.weight, a=leak)
+        if layer.bias is not None:
             layer.bias.data.zero_()
 
 class ConvBlock(nn.Module):
@@ -64,142 +65,98 @@ class Sigmoid(nn.Module):
         else:
             return torch.sigmoid(x)
 
-class UResNet(nn.Module):
-    def __init__(self, in_dim, n_classes, n_filters=16, drop_prob=0.1, y_range=None):
-        super(UResNet, self).__init__()
+class UResNetEncoder(nn.Module):
+    def __init__(self, in_dim, n_filters=16, drop_prob=0.1):
+        super(UResNetEncoder, self).__init__()
         self.ds_conv_1 = ConvBlock(in_dim, n_filters)
         self.ds_conv_2 = ConvBlock(n_filters, 2 * n_filters)
         self.ds_conv_3 = ConvBlock(2 * n_filters, 4 * n_filters)
         self.ds_conv_4 = ConvBlock(4 * n_filters, 8 * n_filters)
-        self.ds_maxpool_1 = maxpool()
-        self.ds_maxpool_2 = maxpool()
-        self.ds_maxpool_3 = maxpool()
-        self.ds_maxpool_4 = maxpool()
-        self.ds_dropout_1 = dropout(drop_prob)
-        self.ds_dropout_2 = dropout(drop_prob)
-        self.ds_dropout_3 = dropout(drop_prob)
-        self.ds_dropout_4 = dropout(drop_prob)
+        self.ds_maxpool = maxpool()
+        self.ds_dropout = dropout(drop_prob)
+    def forward(self, x):
+        conv_stack = {}
+        x = self.ds_conv_1(x)
+        conv_stack['s1'] = x.clone()
+        x = self.ds_maxpool(x)
+        x = self.ds_dropout(x)
+        x = self.ds_conv_2(x)
+        conv_stack['s2'] = x.clone()
+        x = self.ds_maxpool(x)
+        x = self.ds_dropout(x)
+        x = self.ds_conv_3(x)
+        conv_stack['s3'] = x.clone()
+        x = self.ds_maxpool(x)
+        x = self.ds_dropout(x)
+        x = self.ds_conv_4(x)
+        conv_stack['s4'] = x.clone()
+        x = self.ds_maxpool(x)
+        x = self.ds_dropout(x)
+        return x, conv_stack
+
+class UResNetDecoder(nn.Module):
+    def __init__(self, n_filters=16, drop_prob=0.1, n_classes=1):
+        super(UResNetDecoder, self).__init__()
         self.bridge = ConvBlock(8 * n_filters, 16 * n_filters)
         self.us_tconv_4 = TransposeConvBlock(16 * n_filters, 8 * n_filters)
-        self.us_tconv_3 = TransposeConvBlock(8 * n_filters, 4 * n_filters)
-        self.us_tconv_2 = TransposeConvBlock(4 * n_filters, 2 * n_filters)
-        self.us_tconv_1 = TransposeConvBlock(2 * n_filters, n_filters)
         self.us_conv_4 = ConvBlock(16 * n_filters, 8 * n_filters)
+        self.us_tconv_3 = TransposeConvBlock(8 * n_filters, 4 * n_filters)
         self.us_conv_3 = ConvBlock(8 * n_filters, 4 * n_filters)
+        self.us_tconv_2 = TransposeConvBlock(4 * n_filters, 2 * n_filters)
         self.us_conv_2 = ConvBlock(4 * n_filters, 2 * n_filters)
+        self.us_tconv_1 = TransposeConvBlock(2 * n_filters, n_filters)
         self.us_conv_1 = ConvBlock(2 * n_filters, n_filters)
-        self.us_dropout_4 = dropout(drop_prob)
-        self.us_dropout_3 = dropout(drop_prob)
-        self.us_dropout_2 = dropout(drop_prob)
-        self.us_dropout_1 = dropout(drop_prob)
+        self.us_dropout = dropout(drop_prob)
         self.output = nn.Conv2d(n_filters, n_classes, kernel_size=1)
-    def forward(self, x):
-        res = x
-        res = self.ds_conv_1(res)
-        conv_stack_1 = res.clone()
-        res = self.ds_maxpool_1(res)
-        res = self.ds_dropout_1(res)
-        res = self.ds_conv_2(res)
-        conv_stack_2 = res.clone()
-        res = self.ds_maxpool_2(res)
-        res = self.ds_dropout_2(res)
-        res = self.ds_conv_3(res)
-        conv_stack_3 = res.clone()
-        res = self.ds_maxpool_3(res)
-        res = self.ds_dropout_3(res)
-        res = self.ds_conv_4(res)
-        conv_stack_4 = res.clone()
-        res = self.ds_maxpool_4(res)
-        res = self.ds_dropout_4(res)
-        res = self.bridge(res)
-        res = self.us_tconv_4(res)
-        res = torch.cat([res, conv_stack_4], dim=1)
-        res = self.us_dropout_4(res)
-        res = self.us_conv_4(res)
-        res = self.us_tconv_3(res)
-        res = torch.cat([res, conv_stack_3], dim=1)
-        res = self.us_dropout_3(res)
-        res = self.us_conv_3(res)
-        res = self.us_tconv_2(res)
-        res = torch.cat([res, conv_stack_2], dim=1)
-        res = self.us_dropout_2(res)
-        res = self.us_conv_2(res)
-        res = self.us_tconv_1(res)
-        res = torch.cat([res, conv_stack_1], dim=1)
-        res = self.us_dropout_1(res)
-        res = self.us_conv_1(res)
-        output = self.output(res)
-        return output
+    def forward(self, x, conv_stack):
+        x = self.bridge(x)
+        x = self.us_tconv_4(x)
+        x = torch.cat([x, conv_stack['s4']], dim=1)
+        x = self.us_dropout(x)
+        x = self.us_conv_4(x)
+        x = self.us_tconv_3(x)
+        x = torch.cat([x, conv_stack['s3']], dim=1)
+        x = self.us_dropout(x)
+        x = self.us_conv_3(x)
+        x = self.us_tconv_2(x)
+        x = torch.cat([x, conv_stack['s2']], dim=1)
+        x = self.us_dropout(x)
+        x = self.us_conv_2(x)
+        x = self.us_tconv_1(x)
+        x = torch.cat([x, conv_stack['s1']], dim=1)
+        x = self.us_dropout(x)
+        x = self.us_conv_1(x)
+        x = self.output(x)
+        return x
 
-class ResNetEncoder(nn.Module):
-    def __init__(self, in_channels, feature_dim, input_size=(512,512), base_filters=64):
-        super(ResNetEncoder, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, base_filters, kernel_size=7, stride=2, padding=3, bias=False)
-        self.bn1 = nn.BatchNorm2d(base_filters)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(base_filters, base_filters, blocks=2, stride=1)
-        self.layer2 = self._make_layer(base_filters, base_filters*2, blocks=2, stride=2)
-        self.layer3 = self._make_layer(base_filters*2, base_filters*4, blocks=2, stride=2)
-        self.layer4 = self._make_layer(base_filters*4, base_filters*8, blocks=2, stride=2)
-        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
-        with torch.no_grad():
-            dummy = torch.zeros(1, in_channels, input_size[0], input_size[1])
-            dummy = self.conv1(dummy)
-            dummy = self.bn1(dummy)
-            dummy = self.relu(dummy)
-            dummy = self.maxpool(dummy)
-            dummy = self.layer1(dummy)
-            dummy = self.layer2(dummy)
-            dummy = self.layer3(dummy)
-            dummy = self.layer4(dummy)
-            dummy = self.avgpool(dummy)
-            n_features = dummy.view(1, -1).size(1)
-        self.fc = nn.Linear(n_features, feature_dim)
-    def _make_layer(self, in_channels, out_channels, blocks, stride):
-        layers = []
-        layers.append(self._conv_block(in_channels, out_channels, stride))
-        for _ in range(1, blocks):
-            layers.append(self._conv_block(out_channels, out_channels, stride=1))
-        return nn.Sequential(*layers)
-    def _conv_block(self, in_channels, out_channels, stride):
-        return nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
+class UResNetFull(nn.Module):
+    def __init__(self, in_dim, n_classes, n_filters=16, drop_prob=0.1):
+        super(UResNetFull, self).__init__()
+        self.encoder = UResNetEncoder(in_dim, n_filters, drop_prob)
+        self.decoder = UResNetDecoder(n_filters, drop_prob, n_classes)
+    def forward(self, x):
+        x, conv_stack = self.encoder(x)
+        x = self.decoder(x, conv_stack)
+        return x
+
+class ProjectionHead(nn.Module):
+    def __init__(self, input_dim, hidden_dim=512, output_dim=128):
+        super(ProjectionHead, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, output_dim)
         )
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
-        x = F.normalize(x, p=2, dim=1)
-        return x
+        return self.net(x)
     
-class EncodedClassifier(nn.Module):
-    def __init__(self, encoder, feature_dim, num_planes, hidden_dim):
-        super(EncodedClassifier, self).__init__()
-        self.encoder = encoder
-        self.num_planes = num_planes
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-        agg_dim = feature_dim * self.num_planes
-        self.fc1 = nn.Linear(agg_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 1)    
+class SimCLRModel(nn.Module):
+    def __init__(self, in_channels, feature_dim, projection_hidden_dim=512, projection_dim=128):
+        super(SimCLRModel, self).__init__()
+        self.encoder = UResNetEncoder(in_channels)
+        self.projection_head = ProjectionHead(feature_dim, projection_hidden_dim, projection_dim)
     def forward(self, x):
-        batch_size, n_planes, C, H, W = x.size()
-        assert n_planes == self.num_planes
-        x = x.view(batch_size * n_planes, C, H, W)
-        features = self.encoder(x)
-        features = features.view(batch_size, n_planes, -1)
-        agg_features = features.view(batch_size, -1)
-        out = F.relu(self.fc1(agg_features))
-        out = torch.sigmoid(self.fc2(out))
-        return out
+        features, _ = self.encoder(x)
+        pooled = F.adaptive_avg_pool2d(features, (1, 1)).view(features.size(0), -1)
+        projections = self.projection_head(pooled)
+        return F.normalize(projections, dim=1)
