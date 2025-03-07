@@ -30,7 +30,7 @@ config = Config(config_path)
 dataset = Dataset(config)
 print(dataset.__len__())
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-train_loader = DataLoader(dataset, batch_size=16, shuffle=True)
+train_loader = DataLoader(dataset, batch_size=32, shuffle=True)
 model = SimCLRModel(in_channels=1, feature_dim=128, projection_hidden_dim=512, projection_dim=128).to(device)
 optimiser = optim.Adam(model.parameters(), lr=1e-3)
 

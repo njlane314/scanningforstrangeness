@@ -1,4 +1,6 @@
 import matplotlib as mpl
+mpl.rcParams['text.usetex'] = False  # Disable LaTeX rendering
+
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.patches as mpatches
@@ -6,18 +8,19 @@ import numpy as np
 import random
 import torch
 from scipy.ndimage import gaussian_filter
-mpl.rcParams['text.usetex'] = True
 
 class Visualiser:
     def __init__(self, config):
-        self.seg_classes = config.get("model.seg_classes")
+        self.seg_classes = config.get("train.segmentation_classes")
         self.width = config.get("dataset.width")
         self.height = config.get("dataset.height")
+    
     def _get_random(self, dataset):
-        sig = [i for i, t in enumerate(dataset.type) if t == 0]
+        sig = [i for i, t in enumerate(dataset.type_array) if t == 0]
         if not sig:
             return random.choice(dataset)
         return random.choice(sig)
+    
     def visualise_input_event(self, dataset):
         idx = self._get_random(dataset)
         event_data = dataset[idx]
@@ -40,6 +43,7 @@ class Visualiser:
             plt.tight_layout()
             plt.savefig(f"event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
             plt.close(fig)
+    
     def visualise_truth_event(self, dataset):
         idx = self._get_random(dataset)
         event_data = dataset[idx]
@@ -70,6 +74,7 @@ class Visualiser:
             plt.tight_layout()
             plt.savefig(f"truth_event_{r}_{sr}_{evnum}_plane_{planes[i]}.png")
             plt.close(fig)
+    
     def visualise_overlay_event(self, dataset):
         idx = self._get_random(dataset)
         event_data = dataset[idx]
@@ -91,12 +96,12 @@ class Visualiser:
                 hex_color = custom_overlay_colors.get(c, "#FFFFFF")
                 class_colors.append(colors.to_rgba(hex_color, alpha=1.0))
         legend_labels = {
-            1: r"$\text{Noise}$",
-            2: r"$\mu$",                   # Muon
-            3: r"$K^{\pm}$",               # Charged Kaon
-            4: r"$K^{0}_{S}$",             # Kaon Short
-            5: r"$\Lambda$",               # Lambda
-            6: r"$\Sigma^{\pm}$"           # Charged Sigma
+            1: "Noise",
+            2: "Muon",
+            3: "Charged Kaon",
+            4: "Kaon Short",
+            5: "Lambda",
+            6: "Charged Sigma"
         }
         for i in range(input_img.shape[0]):
             if torch.is_tensor(truth_img):

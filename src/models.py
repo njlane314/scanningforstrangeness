@@ -4,10 +4,8 @@ import torch.nn.functional as F
 
 def maxpool():
     return nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
-
 def dropout(prob):
     return nn.Dropout(prob)
-
 def reinit_layer(layer, leak=0.0, use_kaiming_normal=True):
     if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.ConvTranspose2d):
         if use_kaiming_normal:
@@ -16,7 +14,6 @@ def reinit_layer(layer, leak=0.0, use_kaiming_normal=True):
             nn.init.kaiming_uniform_(layer.weight, a=leak)
         if layer.bias is not None:
             layer.bias.data.zero_()
-
 class ConvBlock(nn.Module):
     def __init__(self, c_in, c_out, k_size=3, k_pad=1):
         super(ConvBlock, self).__init__()
@@ -36,7 +33,6 @@ class ConvBlock(nn.Module):
         x = self.conv2(x)
         x = self.norm2(x)
         return self.relu(x + identity)
-
 class TransposeConvBlock(nn.Module):
     def __init__(self, c_in, c_out, k_size=3, k_pad=1):
         super(TransposeConvBlock, self).__init__()
@@ -48,7 +44,6 @@ class TransposeConvBlock(nn.Module):
         reinit_layer(self.block[0])
     def forward(self, x):
         return self.block(x)
-
 class Sigmoid(nn.Module):
     def __init__(self, out_range=None):
         super(Sigmoid, self).__init__()
@@ -64,7 +59,6 @@ class Sigmoid(nn.Module):
             return torch.sigmoid(x) * self.range + self.low
         else:
             return torch.sigmoid(x)
-
 class UResNetEncoder(nn.Module):
     def __init__(self, in_dim, n_filters=16, drop_prob=0.1):
         super(UResNetEncoder, self).__init__()
@@ -93,7 +87,6 @@ class UResNetEncoder(nn.Module):
         x = self.ds_maxpool(x)
         x = self.ds_dropout(x)
         return x, conv_stack
-
 class UResNetDecoder(nn.Module):
     def __init__(self, n_filters=16, drop_prob=0.1, n_classes=1):
         super(UResNetDecoder, self).__init__()
@@ -128,7 +121,6 @@ class UResNetDecoder(nn.Module):
         x = self.us_conv_1(x)
         x = self.output(x)
         return x
-
 class UResNetFull(nn.Module):
     def __init__(self, in_dim, n_classes, n_filters=16, drop_prob=0.1):
         super(UResNetFull, self).__init__()
@@ -138,7 +130,6 @@ class UResNetFull(nn.Module):
         x, conv_stack = self.encoder(x)
         x = self.decoder(x, conv_stack)
         return x
-
 class ProjectionHead(nn.Module):
     def __init__(self, input_dim, hidden_dim=512, output_dim=128):
         super(ProjectionHead, self).__init__()
@@ -149,7 +140,6 @@ class ProjectionHead(nn.Module):
         )
     def forward(self, x):
         return self.net(x)
-    
 class SimCLRModel(nn.Module):
     def __init__(self, in_channels, feature_dim, projection_hidden_dim=512, projection_dim=128):
         super(SimCLRModel, self).__init__()

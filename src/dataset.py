@@ -1,4 +1,5 @@
 import os
+import sys
 import uproot
 import numpy as np
 import torch
@@ -15,7 +16,7 @@ class Dataset(TorchDataset):
         self.seg_classes = config.get("train.segmentation_classes")
         self.file_path = os.path.join(self.path, self.file)
         if not os.path.exists(self.file_path):
-            raise FileNotFoundError(f"File not found: {self.file_path}")
+            sys.exit(0)
         self.root_file = uproot.open(self.file_path)
         self.tree = self.root_file[self.tree_name]
         self.run_array = self.tree["run"].array(library="np")
@@ -25,12 +26,13 @@ class Dataset(TorchDataset):
         self.num_events = len(self.run_array)
     def __len__(self):
         return self.num_events
-    def __getitem__(self, idx):
-        run = self.run_array[idx]
-        subrun = self.subrun_array[idx]
-        event = self.event_array[idx]
-        input_data = self.tree["input"].array(library="np", entry_start=idx, entry_stop=idx+1)[0]
-        truth_data = self.tree["truth"].array(library="np", entry_start=idx, entry_stop=idx+1)[0]
+    def __getitem__(self, id):
+        run = self.run_array[id]
+        subrun = self.subrun_array[id]
+        event = self.event_array[id]
+        type = self.type_array[id]
+        input_data = self.tree["input"].array(library="np", entry_start=id, entry_stop=id+1)[0]
+        truth_data = self.tree["truth"].array(library="np", entry_start=id, entry_stop=id+1)[0]
         images = []
         targets = []
         for plane_idx in range(len(input_data)):
@@ -48,4 +50,4 @@ class Dataset(TorchDataset):
             one_hot = F.one_hot(plane_tensor, num_classes=self.seg_classes).permute(2, 0, 1)
             one_hot_targets.append(one_hot)
         one_hot_targets = torch.cat(one_hot_targets, dim=0)
-        return torch.tensor(images_np), one_hot_targets, run, subrun, event
+        return torch.tensor(images_np), one_hot_targets, run, subrun, event, type
