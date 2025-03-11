@@ -21,17 +21,17 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument('--contrastive-epochs', default=5, type=int, help='Number of epochs for contrastive training')
     parser.add_argument('--batch', default=32, type=int, help='Batch size')
     parser.add_argument('--train-frac', default=0.7, type=float, help='Fraction of data for training')
-    parser.add_argument('--workers', default=2, type=int, help='Data loading workers')  # Reduced for single file
-    parser.add_argument('--data-dir', type=str, default='/gluster/data/dune/niclane/background/', help='Path to ROOT files')
+    parser.add_argument('--workers', default=2, type=int, help='Data loading workers') 
+    parser.add_argument('--data-dir', type=str, default='/gluster/data/dune/niclane/background', help='Path to ROOT files')
     parser.add_argument('--root-file', type=str, default=None, help='Specific ROOT file (overrides data-dir glob)')
     parser.add_argument('--img-size', type=int, default=512, help='Square image dimension in pixels')
     parser.add_argument('--lr', default=0.001, type=float, help='Learning rate for Adam')
     parser.add_argument('--resnet', type=str, default='resnet18', 
                         choices=['resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152'],
                         help='ResNet variant')
-    parser.add_argument('--ckpt-dir', type=str, default='checkpoints', help='Checkpoint save directory')
+    parser.add_argument('--ckpt-dir', type=str, default='/gluster/data/dune/niclane/checkpoints', help='Checkpoint save directory')
     parser.add_argument('--ckpt-freq', type=int, default=1, help='Checkpoint save frequency in epochs')
-    parser.add_argument('--loss-file', type=str, default='losses.npz', help='File to save loss logs')
+    parser.add_argument('--loss-file', type=str, default='/gluster/data/dune/niclane/checkpoints/losses.npz', help='File to save loss logs')
     return parser
 
 def ifnone(val: Optional[any], default: any) -> any:
@@ -51,7 +51,6 @@ class ImageDataset(Dataset):
         self.num_events = self.tree.num_entries
         print(f"Found {self.num_events} events in {time.time() - start_time:.2f}s")
         
-        # Load only necessary branches
         self.chain = self.tree.arrays(["run", "subrun", "event", "type", "input"], library="np")
         print(f"Loaded arrays in {time.time() - start_time:.2f}s")
         
