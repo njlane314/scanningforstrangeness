@@ -1,8 +1,6 @@
 import argparse
 import os
 import sys
-import time
-import glob
 import uproot
 import numpy as np
 import torch
@@ -11,26 +9,26 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torch.backends.cudnn as cudnn
 from torch.optim import Adam
-from typing import Optional, Tuple
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 cudnn.benchmark = True
 
-def get_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description='UNet Segmentation for Neutrino Events with Focal Loss (Multi-Plane)')
-    parser.add_argument('--epochs', default=5, type=int, help='Number of training epochs')
-    parser.add_argument('--batch', default=8, type=int, help='Batch size')
-    parser.add_argument('--train-frac', default=0.8, type=float, help='Fraction of data for training')
-    parser.add_argument('--workers', default=4, type=int, help='Data loading workers')
-    parser.add_argument('--data-dir', type=str, default='/gluster/data/dune/niclane/signal/', help='Path to ROOT files')
-    parser.add_argument('--root-file', type=str, default=None, help='Specific ROOT file')
-    parser.add_argument('--img-size', default=512, type=int, help='Image dimension in pixels (assuming square)')
-    parser.add_argument('--lr', default=0.0001, type=float, help='Learning rate for Adam')
-    parser.add_argument('--n-classes', default=5, type=int, help='Number of segmentation classes per plane (e.g., 0=empty, 1=noise, 2,3,4=sigs)')
-    parser.add_argument('--ckpt-dir', type=str, default='/gluster/data/dune/niclane/checkpoints_seg', help='Checkpoint save directory')
-    parser.add_argument('--ckpt-freq', type=int, default=1, help='Checkpoint save frequency in epochs')
-    parser.add_argument('--loss-file', type=str, default='/gluster/data/dune/niclane/seg_losses.npz', help='File to save loss logs')
-    parser.add_argument('--gamma', default=2.0, type=float, help='Focal Loss gamma parameter')
-    parser.add_argument('--alpha', default=0.25, type=float, help='Focal Loss alpha parameter')
+def get_parser():
+    parser = argparse.ArgumentParser(description="Segmentation Training Script")
+    parser.add_argument("--num-epochs", default=1, type=int, help="Number of training epochs")
+    parser.add_argument("--batch-size", default=16, type=int, help="Batch size for training")
+    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root",
+                        help="Path to the single input ROOT file")
+    parser.add_argument("--img-size", default=512, type=int, help="Image size (square) in pixels")
+    parser.add_argument("--learning-rate", default=0.0001, type=float, help="Learning rate for the optimizer")
+    parser.add_argument("--target-labels", type=str, default="0,1,2,5",
+                        help="Comma-separated list of enum values to train with")
+    parser.add_argument("--num-planes", default=3, type=int, help="Number of image planes")
+    parser.add_argument("--checkpoint-directory", type=str, default="/gluster/data/dune/niclane/checkpoints_seg",
+                        help="Directory to save model checkpoints")
+    parser.add_argument("--loss-file", type=str, default="/gluster/data/dune/niclane/checkpoints_seg/seg_losses.npz",
+                        help="Output file to save loss and metric results")
+    parser.add_argument("--gamma", default=2.0, type=float, help="Gamma parameter for Focal Loss")
     return parser
 
 def maxpool():
@@ -58,7 +56,6 @@ class ConvBlock(nn.Module):
         self.identity = nn.Conv2d(c_in, c_out, kernel_size=1, padding=0, stride=1)
         reinit_layer(self.conv1)
         reinit_layer(self.conv2)
-
     def forward(self, x):
         identity = self.identity(x)
         x = self.conv1(x)
@@ -77,329 +74,356 @@ class TransposeConvBlock(nn.Module):
             nn.ReLU(inplace=True)
         )
         reinit_layer(self.block[0])
-
     def forward(self, x):
         return self.block(x)
 
 class UNet(nn.Module):
-    def __init__(self, in_dim, n_classes, depth=4, n_filters=16, drop_prob=0.1, n_planes=3):
+    def __init__(self, in_dim, num_classes, depth=4, n_filters=16, drop_prob=0.1, num_planes=3):
         super(UNet, self).__init__()
-        self.n_planes = n_planes
-        self.n_classes = n_classes
+        self.num_planes = num_planes
+        self.num_classes = num_classes
         self.ds_conv_1 = ConvBlock(in_dim, n_filters)
         self.ds_conv_2 = ConvBlock(n_filters, 2 * n_filters)
         self.ds_conv_3 = ConvBlock(2 * n_filters, 4 * n_filters)
         self.ds_conv_4 = ConvBlock(4 * n_filters, 8 * n_filters)
-
         self.ds_maxpool_1 = maxpool()
         self.ds_maxpool_2 = maxpool()
         self.ds_maxpool_3 = maxpool()
         self.ds_maxpool_4 = maxpool()
-
         self.ds_dropout_1 = dropout(drop_prob)
         self.ds_dropout_2 = dropout(drop_prob)
         self.ds_dropout_3 = dropout(drop_prob)
         self.ds_dropout_4 = dropout(drop_prob)
-
         self.bridge = ConvBlock(8 * n_filters, 16 * n_filters)
-
         self.us_tconv_4 = TransposeConvBlock(16 * n_filters, 8 * n_filters)
         self.us_tconv_3 = TransposeConvBlock(8 * n_filters, 4 * n_filters)
         self.us_tconv_2 = TransposeConvBlock(4 * n_filters, 2 * n_filters)
         self.us_tconv_1 = TransposeConvBlock(2 * n_filters, n_filters)
-
         self.us_conv_4 = ConvBlock(16 * n_filters, 8 * n_filters)
         self.us_conv_3 = ConvBlock(8 * n_filters, 4 * n_filters)
         self.us_conv_2 = ConvBlock(4 * n_filters, 2 * n_filters)
         self.us_conv_1 = ConvBlock(2 * n_filters, 1 * n_filters)
-
         self.us_dropout_4 = dropout(drop_prob)
         self.us_dropout_3 = dropout(drop_prob)
         self.us_dropout_2 = dropout(drop_prob)
         self.us_dropout_1 = dropout(drop_prob)
-
-        self.output = nn.Conv2d(n_filters, n_planes * n_classes, 1)  # Logits for each plane
-
+        self.output = nn.Conv2d(n_filters, num_planes * num_classes, 1)
     def forward(self, x):
         res = x
         res = self.ds_conv_1(res); conv_stack_1 = res.clone()
         res = self.ds_maxpool_1(res)
         res = self.ds_dropout_1(res)
-
         res = self.ds_conv_2(res); conv_stack_2 = res.clone()
         res = self.ds_maxpool_2(res)
         res = self.ds_dropout_2(res)
-
         res = self.ds_conv_3(res); conv_stack_3 = res.clone()
         res = self.ds_maxpool_3(res)
         res = self.ds_dropout_3(res)
-
         res = self.ds_conv_4(res); conv_stack_4 = res.clone()
         res = self.ds_maxpool_4(res)
         res = self.ds_dropout_4(res)
-
         res = self.bridge(res)
-
         res = self.us_tconv_4(res)
         res = torch.cat([res, conv_stack_4], dim=1)
         res = self.us_dropout_4(res)
         res = self.us_conv_4(res)
-
         res = self.us_tconv_3(res)
         res = torch.cat([res, conv_stack_3], dim=1)
         res = self.us_dropout_3(res)
         res = self.us_conv_3(res)
-
         res = self.us_tconv_2(res)
         res = torch.cat([res, conv_stack_2], dim=1)
         res = self.us_dropout_2(res)
         res = self.us_conv_2(res)
-
         res = self.us_tconv_1(res)
         res = torch.cat([res, conv_stack_1], dim=1)
         res = self.us_dropout_1(res)
         res = self.us_conv_1(res)
+        res = self.output(res)
+        return res.view(x.size(0), self.num_planes, self.num_classes, x.size(2), x.size(3))
 
-        return self.output(res)  # [B, 3*n_classes, H, W]
+class ImageDataset(Dataset):
+    def __init__(self, args, file):
+        self.args = args
+        self.file_path = file
+        self.tree_name = "imageanalyser/ImageTree"
+        self.img_size = args.img_size
+        self.num_classes = args.num_classes
+        self.num_planes = args.num_planes
+        self.enum_to_model = {val: idx for idx, val in enumerate(args.target_labels)}
+        try:
+            self.root_file = uproot.open(self.file_path, num_workers=0)
+        except Exception as e:
+            raise RuntimeError(f"Failed to open ROOT file '{self.file_path}': {e}")
+        self.tree = self.root_file[self.tree_name]
+        self.indices = np.arange(self.tree.num_entries)
+        self.num_events = len(self.indices)
+    def __len__(self):
+        return self.num_events
+    def __getitem__(self, idx):
+        actual_idx = self.indices[idx]
+        try:
+            data = self.tree.arrays(
+                ["input", "truth", "run", "subrun", "event"],
+                entry_start=actual_idx, entry_stop=actual_idx + 1,
+                library="np"
+            )
+        except Exception as e:
+            print(f"Error fetching event {actual_idx}: {e}", file=sys.stderr)
+            raise
+        run = data["run"][0]
+        subrun = data["subrun"][0]
+        event = data["event"][0]
+        images = []
+        for plane in range(self.num_planes):
+            plane_iterable = data["input"][0][plane]
+            plane_array = np.fromiter(plane_iterable, dtype=np.float32, count=self.img_size * self.img_size)
+            images.append(plane_array.reshape(self.img_size, self.img_size))
+        images_tensor = torch.tensor(np.stack(images), dtype=torch.float32)
+        labels = []
+        for plane_idx in range(self.num_planes):
+            truth_iterable = data["truth"][0][plane_idx]
+            truth_array = np.fromiter(truth_iterable, dtype=np.int64, count=self.img_size * self.img_size)
+            labels.append(truth_array.reshape(self.img_size, self.img_size))
+        label_tensor = torch.tensor(np.stack(labels), dtype=torch.long)
+        remapped_labels = label_tensor.clone()
+        for enum_val, model_val in self.enum_to_model.items():
+            remapped_labels[label_tensor == enum_val] = model_val
+        mask = ~torch.isin(label_tensor, torch.tensor(list(self.enum_to_model.keys()), dtype=torch.long))
+        if mask.any():
+            remapped_labels[mask] = 1
+        return images_tensor, remapped_labels, run, subrun, event
 
 class FocalLoss(nn.Module):
-    def __init__(self, gamma: float = 2.0, alpha: float = 0.25, reduction: str = 'mean', n_planes: int = 3):
+    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None, reduction: str = 'mean'):
         super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.alpha = alpha
+        self.gamma = nn.Parameter(torch.tensor(gamma), requires_grad=True)
+        self.weight = weight
         self.reduction = reduction
-        self.n_planes = n_planes
-
     def forward(self, inp: torch.Tensor, targ: torch.Tensor) -> torch.Tensor:
-        """
-        inp: [B, 3*n_classes, H, W] logits
-        targ: [B, 3, H, W] long tensor with class indices per plane
-        """
-        B, C, H, W = inp.shape
-        n_classes = C // self.n_planes
-        inp = inp.view(B, self.n_planes, n_classes, H, W)  # [B, 3, n_classes, H, W]
-        targ = targ.long()  # Ensure [B, 3, H, W]
-
-        # Compute CE loss per plane
-        ce_loss = F.cross_entropy(inp.view(B * self.n_planes, n_classes, H, W),
-                                 targ.view(B * self.n_planes, H, W),
-                                 reduction='none')  # [B*3, H, W]
-        ce_loss = ce_loss.view(B, self.n_planes, H, W)  # [B, 3, H, W]
-
-        # Compute probabilities
-        p = F.softmax(inp, dim=2)  # [B, 3, n_classes, H, W]
-        p_t = p.gather(2, targ.unsqueeze(2)).squeeze(2)  # [B, 3, H, W]
-
-        # Focal weight
-        focal_weight = self.alpha * (1 - p_t) ** self.gamma  # [B, 3, H, W]
-        loss = focal_weight * ce_loss
-
+        ce_loss = F.cross_entropy(inp, targ, weight=self.weight, reduction='none')
+        p_t = torch.exp(-ce_loss)
+        loss = (1 - p_t) ** self.gamma * ce_loss
         if self.reduction == 'mean':
             return loss.mean()
         elif self.reduction == 'sum':
             return loss.sum()
         return loss
- 
-class ImageDataset(Dataset):
-    def __init__(self, args: argparse.Namespace, file: str, indices: Optional[np.ndarray] = None):
-        self.args = args
-        self.file = file
-        self.tree_name = "imageanalyser/ImageTree"
-        self.img_size = args.img_size
-        self.n_classes = args.n_classes
-        self.n_planes = 3
-        
-        print(f"Opening ROOT file: {self.file}")
-        start_time = time.time()
-        self.root_file = uproot.open(self.file)
-        self.tree = self.root_file[self.tree_name]
-        self.num_events = self.tree.num_entries
-        print(f"Found {self.num_events} events in {time.time() - start_time:.2f}s")
-        
-        self.run_array = self.tree["run"].array(library="np")
-        self.subrun_array = self.tree["subrun"].array(library="np")
-        self.event_array = self.tree["event"].array(library="np")
-        self.type_array = self.tree["type"].array(library="np")
-        print(f"Eagerly loaded metadata in {time.time() - start_time:.2f}s")
-        
-        self.indices = indices if indices is not None else np.arange(self.num_events)
-        self.num_events = len(self.indices)
-        print(f"Dataset ready with {self.num_events} events (lazy loading setup)")
 
-    def __len__(self) -> int:
-        return self.num_events
+class FocalLossFlat(nn.Module):
+    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None, reduction: str = 'mean', axis: int = 2):
+        super(FocalLossFlat, self).__init__()
+        self.gamma = nn.Parameter(torch.tensor(gamma, dtype=torch.float32), requires_grad=True)
+        self.weight = weight
+        self.reduction = reduction
+        self.axis = axis
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, int, int, int]:
-        actual_idx = self.indices[idx]
-        print(f"Fetching event {actual_idx} at {time.strftime('%H:%M:%S')}")
-        
-        fetch_start = time.time()
-        try:
-            data = self.tree.arrays(["input", "truth"], entry_start=actual_idx, entry_stop=actual_idx + 1, library="np")
-            input_data = data["input"][0]
-            truth_data = data["truth"][0]
-        except Exception as e:
-            print(f"Error fetching event {actual_idx}: {str(e)}", file=sys.stderr)
-            raise
-        
-        run = self.run_array[actual_idx]
-        subrun = self.subrun_array[actual_idx]
-        event = self.event_array[actual_idx]
-        print(f"Event {actual_idx}: Metadata - Run/Subrun/Event: {run}.{subrun}.{event}, Fetch time: {time.time() - fetch_start:.2f}s")
+    def forward(self, inp: torch.Tensor, targ: torch.Tensor) -> torch.Tensor:
+        if inp.dim() > 2:
+            # inp: [batch_size, num_planes, num_classes, H, W]
+            dims = list(range(inp.dim()))
+            dims.remove(self.axis)  # Remove 2: [0, 1, 2, 3, 4] -> [0, 1, 3, 4]
+            dims.append(self.axis)  # Append 2: [0, 1, 3, 4, 2]
+            inp = inp.permute(*dims)  # [8, 3, 512, 512, 5]
+            inp = inp.contiguous().view(-1, inp.size(-1))  # [8*3*512*512, 5]
+            targ = targ.view(-1)  # [8*3*512*512]
+        return FocalLoss(gamma=self.gamma, weight=self.weight, reduction=self.reduction)(inp, targ)
+    def decodes(self, x: torch.Tensor) -> torch.Tensor:
+        return x.argmax(dim=self.axis)
+    def activation(self, x: torch.Tensor) -> torch.Tensor:
+        return F.softmax(x, dim=self.axis)
 
-        images = []
-        for plane_idx in range(self.n_planes):
-            plane = np.fromiter(input_data[plane_idx], dtype=np.float32, count=self.img_size * self.img_size)
-            images.append(plane.reshape(self.img_size, self.img_size))
-        images_tensor = torch.tensor(np.stack(images), dtype=torch.float32)
-        
-        labels = []
-        for plane_idx in range(self.n_planes):
-            label = np.fromiter(truth_data[plane_idx], dtype=np.int64, count=self.img_size * self.img_size)
-            labels.append(label.reshape(self.img_size, self.img_size))
-        label_tensor = torch.tensor(np.stack(labels), dtype=torch.long)
-        
-        print(f"Event {actual_idx}: Data processed - Images shape: {images_tensor.shape}, Labels shape: {label_tensor.shape}")
-        return images_tensor, label_tensor, run, subrun, event
+def computer_jaccard(pred, target, target_labels):
+    jaccards = []
+    for cls in target_labels:  
+        intersection = ((pred == cls) & (target == cls)).sum().item()
+        union = ((pred == cls) | (target == cls)).sum().item()
+        if union == 0:
+            jaccards.append(np.nan)
+        else:
+            jaccards.append(intersection / union)
+    return np.nanmean(jaccards)
 
-def ifnone(val: Optional[any], default: any) -> any:
-    return default if val is None else val
+def compute_dice(pred, target, target_labels):
+    dices = []
+    for cls in target_labels:
+        pred_cls = (pred == cls)
+        target_cls = (target == cls)
+        intersection = (pred_cls & target_cls).sum().item()
+        denom = pred_cls.sum().item() + target_cls.sum().item()
+        if denom == 0:
+            dices.append(np.nan)
+        else:
+            dices.append((2 * intersection) / (denom + 1e-6))
+    return np.nanmean(dices)
 
-def split_dataset(full_ds: ImageDataset, train_frac: float) -> Tuple[Dataset, Dataset]:
-    n_total = len(full_ds)
-    n_train = int(n_total * train_frac)
-    indices = np.random.permutation(n_total)
-    train_ds = ImageDataset(full_ds.args, full_ds.file, indices[:n_train])
-    valid_ds = ImageDataset(full_ds.args, full_ds.file, indices[n_train:])
-    return train_ds, valid_ds
+def compute_recall(pred, target, target_labels):
+    recalls = []
+    for cls in target_labels:
+        tp = ((pred == cls) & (target == cls)).sum().item()
+        fn = ((target == cls) & (pred != cls)).sum().item()
+        if (tp + fn) == 0:
+            recalls.append(np.nan)
+        else:
+            recalls.append(tp / (tp + fn))
+    return np.nanmean(recalls)
 
-def get_dataloaders(args: argparse.Namespace) -> Tuple[DataLoader, DataLoader]:
-    workers = ifnone(args.workers, min(2, torch.get_num_threads()))
-    file = args.root_file if args.root_file else glob.glob(os.path.join(args.data_dir, "*.root"))[0]
-    print(f"Loading file: {file}")
-    full_ds = ImageDataset(args, file)
-    train_ds, valid_ds = split_dataset(full_ds, args.train_frac)
-    train_dl = DataLoader(train_ds, batch_size=args.batch, num_workers=workers, shuffle=True, pin_memory=True)
-    valid_dl = DataLoader(valid_ds, batch_size=args.batch, num_workers=workers, shuffle=False, pin_memory=True)
-    return train_dl, valid_dl
-
-def train_epoch(model: nn.Module, train_dl: DataLoader, optimizer: torch.optim.Optimizer, criterion, device: torch.device) -> float:
+def train_epoch(model, epoch, dataloader, optimiser, criterion, scheduler, device, args):
     model.train()
-    total_loss, total_samples = 0.0, 0
-    epoch_start = time.time()
-    total_batches = len(train_dl)
-    print(f"Training epoch started at {time.strftime('%Y-%m-%d %H:%M:%S')}, Total Batches: {total_batches}")
-    print(f"DataLoader: {train_dl}, Batch Size: {train_dl.batch_size}, Num Workers: {train_dl.num_workers}")
+    train_loss, valid_loss, learning_rate = [], [], []
+    gamma_history, jaccard_history, dice_history = [], [], []
+    accuracy_history, recall_history = [], []
+    model_to_enum = {idx: val for idx, val in enumerate(args.target_labels)}
+    for batch, (images, masks, _, _, _) in enumerate(dataloader):
+        images, masks = images.to(device), masks.to(device)
+        half = images.size(0) // 2
+        train_images, valid_images = images[:half], images[half:]
+        train_masks, valid_masks = masks[:half], masks[half:]
+        optimiser.zero_grad()
+        train_outputs = model(train_images)
+        loss_val = criterion(train_outputs, train_masks)
+        loss_val.backward()
+        model.eval()
+        with torch.no_grad():
+            valid_outputs = model(valid_images)
+            val_loss_val = criterion(valid_outputs, valid_masks)
+            preds = criterion.decodes(valid_outputs)  
+            preds_np = preds.cpu().numpy()
+            preds_enum = np.vectorize(model_to_enum.get)(preds_np)
+            masks_np = valid_masks.cpu().numpy()
+            num_planes = preds_np.shape[1]
+            jaccard_per_plane = []
+            dice_per_plane = []
+            acc_per_plane = []
+            recall_per_plane = []
+            for plane in range(num_planes):
+                jaccard_plane = []
+                dice_plane = []
+                acc_plane = []
+                recall_plane = []
+                for sample in range(preds_np.shape[0]):
+                    jaccard_plane.append(computer_jaccard(preds_enum[sample, plane],
+                                                         masks_np[sample, plane],
+                                                         args.target_labels))
+                    dice_plane.append(compute_dice(preds_enum[sample, plane],
+                                                  masks_np[sample, plane],
+                                                  args.target_labels))
+                    acc_plane.append(np.mean(preds_enum[sample, plane] == masks_np[sample, plane]))
+                    recall_plane.append(compute_recall(preds_enum[sample, plane],
+                                                      masks_np[sample, plane],
+                                                      args.target_labels))
+                jaccard_per_plane.append(np.nanmean(jaccard_plane))
+                dice_per_plane.append(np.nanmean(dice_plane))
+                acc_per_plane.append(np.nanmean(acc_plane))
+                recall_per_plane.append(np.nanmean(recall_plane))
+        model.train()
+        optimiser.step()
+        scheduler.step()
+        train_loss.append(loss_val.item())
+        valid_loss.append(val_loss_val.item())
+        learning_rate.append(optimiser.param_groups[0]['lr'])
+        gamma_history.append(criterion.gamma.item())
+        jaccard_history.append(jaccard_per_plane)
+        dice_history.append(dice_per_plane)
+        accuracy_history.append(acc_per_plane)
+        recall_history.append(recall_per_plane)
+        
+        if batch % 10 == 0:
+            print(f"Batch {batch:03d} | Train Loss: {loss_val.item():.4f} | Val Loss: {val_loss_val.item():.4f} | Gamma: {criterion.gamma.item():.4f}")
+            print(f"   Per-plane metrics: Jaccard: {jaccard_per_plane}, Dice: {dice_per_plane}")
+            print(f"                      Accuracy: {acc_per_plane}, Recall: {recall_per_plane}")
 
-    try:
-        for batch_idx, (images, masks, run, subrun, event) in enumerate(train_dl):
-            batch_start = time.time()
-            print(f"Batch {batch_idx}/{total_batches-1}: Fetched data at {time.strftime('%H:%M:%S')}, Run/Subrun/Event: {run[0]}.{subrun[0]}.{event[0]}")
-            print(f"Batch {batch_idx}: Images shape: {images.shape}, Masks shape: {masks.shape}")
+        if batch % 1000 == 0:
+            checkpoint_path = os.path.join(args.checkpoint_directory, f"unet_epoch{epoch}_batch{batch}.pth")
+            checkpoint = {
+                'model_state_dict': model.state_dict(),
+                'target_labels': args.target_labels,
+            }
+            torch.save(checkpoint, checkpoint_path)
+            print(f"Saved checkpoint: {checkpoint_path}")
+        
+        del images, masks, train_images, valid_images, train_masks, valid_masks
+        del train_outputs, valid_outputs, preds, preds_np, preds_enum, masks_np
+        del jaccard_per_plane, dice_per_plane, acc_per_plane, recall_per_plane
+        del jaccard_plane, dice_plane, acc_plane, recall_plane
+        torch.cuda.empty_cache()
 
-            images, masks = images.to(device), masks.to(device)
-            print(f"Batch {batch_idx}: Data moved to device: {device}")
+    return (train_loss, valid_loss, learning_rate, gamma_history, 
+            jaccard_history, dice_history, accuracy_history, recall_history)
 
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, masks)
-            
-            loss.backward()
-            optimizer.step()
-            
-            batch_loss = loss.item() * images.size(0)
-            total_loss += batch_loss
-            total_samples += images.size(0)
-            
-            batch_time = time.time() - batch_start
-            print(f"Batch {batch_idx}: Processed {images.size(0)} samples, Loss: {loss.item():.4f}, Time: {batch_time:.2f}s")
-    except Exception as e:
-        print(f"Error in training loop at batch {batch_idx}: {str(e)}", file=sys.stderr)
-        raise
-
-    epoch_time = time.time() - epoch_start
-    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
-    print(f"Training epoch completed in {epoch_time:.2f}s, Avg Loss: {avg_loss:.4f}, Total Samples: {total_samples}")
-    return avg_loss
-
-def validate_epoch(model: nn.Module, valid_dl: DataLoader, criterion, device: torch.device) -> float:
-    model.eval()
-    total_loss, total_samples = 0.0, 0
-    epoch_start = time.time()
-    total_batches = len(valid_dl)
-    print(f"Validation epoch started at {time.strftime('%Y-%m-%d %H:%M:%S')}, Total Batches: {total_batches}")
-
-    with torch.no_grad():
-        for batch_idx, (images, masks, run, subrun, event) in enumerate(valid_dl):
-            batch_start = time.time()
-            print(f"Batch {batch_idx}/{total_batches-1}: Starting at {time.strftime('%H:%M:%S')}, Run/Subrun/Event: {run[0]}.{subrun[0]}.{event[0]}")
-            
-            images, masks = images.to(device), masks.to(device)  # masks: [B, 3, H, W]
-            print(f"Batch {batch_idx}: Input shape: {images.shape}, Target shape: {masks.shape}, Device: {images.device}")
-
-            forward_start = time.time()
-            outputs = model(images)  # [B, 3*n_classes, H, W]
-            forward_time = time.time() - forward_start
-            print(f"Batch {batch_idx}: Forward pass completed, Output shape: {outputs.shape}, Time: {forward_time:.2f}s")
-
-            loss = criterion(outputs, masks)
-            print(f"Batch {batch_idx}: Loss computed, Value: {loss.item():.4f}")
-
-            batch_loss = loss.item() * images.size(0)
-            total_loss += batch_loss
-            total_samples += images.size(0)
-            
-            batch_time = time.time() - batch_start
-            print(f"Batch {batch_idx}: Processed {images.size(0)} samples, Batch Loss: {loss.item():.4f}, Cumulative Loss: {total_loss/total_samples:.4f}, Time: {batch_time:.2f}s")
-
-    epoch_time = time.time() - epoch_start
-    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
-    print(f"Validation epoch completed at {time.strftime('%Y-%m-%d %H:%M:%S')}, Duration: {epoch_time:.2f}s, Avg Loss: {avg_loss:.4f}, Total Samples: {total_samples}")
-    return avg_loss
+def get_dataloader(args):
+    file = args.root_file
+    dataset = ImageDataset(args, file)
+    return DataLoader(dataset, batch_size=args.batch_size, num_workers=0, shuffle=True, pin_memory=True)
 
 def main():
-    print(f"Starting segmentation training at {time.strftime('%Y-%m-%d %H:%M:%S')}")
-    start_time = time.time()
     parser = get_parser()
     args = parser.parse_args()
+    target_labels = [int(x) for x in args.target_labels.split(',')]
+    args.num_classes = len(target_labels)
+    args.target_labels = target_labels
+    os.makedirs(args.checkpoint_directory, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats(device)
+    dataloader = get_dataloader(args)
+    model = UNet(
+        in_dim=3,
+        num_classes=args.num_classes,
+        depth=4,
+        n_filters=16,
+        drop_prob=0.1,
+        num_planes=args.num_planes
+    ).to(device)
+    criterion = FocalLossFlat(gamma=args.gamma, reduction='mean', axis=2)
+    optimiser = Adam(list(model.parameters()) + list(criterion.parameters()), lr=args.learning_rate)
+    scheduler = CosineAnnealingLR(optimiser, T_max=args.num_epochs, eta_min=1e-6)
+    
+    training = {
+        'train_loss': [],
+        'valid_loss': [],
+        'learning_rate': [],
+        'gamma': [],
+        'jaccard': [],
+        'dice': [],
+        'accuracy': [],
+        'recall': []
+    }
+    for epoch in range(args.num_epochs):
+        (t_loss, v_loss, lrs, gma, jaccards, dices, accs, recs) = train_epoch(model, epoch, dataloader, optimiser, criterion, scheduler, device, args)
+        training['train_loss'].extend(t_loss)
+        training['valid_loss'].extend(v_loss)
+        training['learning_rate'].extend(lrs)
+        training['gamma'].extend(gma)
+        training['jaccard'].extend(jaccards)
+        training['dice'].extend(dices)
+        training['accuracy'].extend(accs)
+        training['recall'].extend(recs)
+        
+        print(f"Epoch {epoch+1}/{args.num_epochs} Summary:")
+        print(f"  Avg Train Loss: {np.mean(t_loss):.4f}, Avg Val Loss: {np.mean(v_loss):.4f}")
+        print(f"  Avg Gamma: {np.mean(gma):.4f}")
+        mean_jaccard = np.nanmean(np.array(jaccards), axis=0)
+        mean_dice = np.nanmean(np.array(dices), axis=0)
+        mean_accuracy = np.nanmean(np.array(accs), axis=0)
+        mean_recall = np.nanmean(np.array(recs), axis=0)
+        print(f"  Mean Per-plane Metrics -> Jaccard: {mean_jaccard}, Dice: {mean_dice}")
+        print(f"                           Accuracy: {mean_accuracy}, Recall: {mean_recall}")
 
-    print("Loading datasets...")
-    data_start = time.time()
-    train_dl, valid_dl = get_dataloaders(args)
-    print(f"Dataset loading took {time.time() - data_start:.2f}s")
-    print(f"Train: {len(train_dl.dataset)} events ({len(train_dl)} batches), Valid: {len(valid_dl.dataset)} events ({len(valid_dl)} batches)")
-
-    print("Initializing UNet model...")
-    model = UNet(in_dim=3, n_classes=args.n_classes, depth=4, n_filters=16, drop_prob=0.1, n_planes=3).to(device)
-    optimizer = Adam(model.parameters(), lr=args.lr)
-    criterion = FocalLoss(gamma=args.gamma, alpha=args.alpha, reduction='mean', n_planes=3)
-
-    train_losses, valid_losses = [], []
-    for epoch in range(args.epochs):
-        print(f"Epoch {epoch}/{args.epochs-1}")
-        train_loss = train_epoch(model, train_dl, optimizer, criterion, device)
-        valid_loss = validate_epoch(model, valid_dl, criterion, device)
-        train_losses.append(train_loss)
-        valid_losses.append(valid_loss)
-        print(f"Epoch {epoch} - Train Loss: {train_loss:.4f} | Valid Loss: {valid_loss:.4f}")
-
-        if (epoch + 1) % args.ckpt_freq == 0:
-            checkpoint_name = f"ckpt_seg_epoch_{epoch+1}.pth"
-            os.makedirs(args.ckpt_dir, exist_ok=True)
-            torch.save({'epoch': epoch, 'model_state_dict': model.state_dict(), 
-                        'optimizer_state_dict': optimizer.state_dict(), 'args': vars(args)}, 
-                       os.path.join(args.ckpt_dir, checkpoint_name))
-            print(f"Saved checkpoint: {checkpoint_name}")
-
-    torch.save({'epoch': args.epochs - 1, 'model_state_dict': model.state_dict(), 
-                'optimizer_state_dict': optimizer.state_dict(), 'args': vars(args)}, 
-               os.path.join(args.ckpt_dir, "final_seg.pth"))
-    total_time = time.time() - start_time
-    print(f"Training completed in {total_time:.2f}s")
-    np.savez(args.loss_file, train_losses=train_losses, valid_losses=valid_losses)
-    print(f"Losses saved to {args.loss_file}")
+        del t_loss, v_loss, lrs, gma, jaccards, dices, accs, recs
+        torch.cuda.empty_cache()
+        
+    np.savez(
+        args.loss_file,
+        train_loss=np.array(training['train_loss']),
+        valid_loss=np.array(training['valid_loss']),
+        learning_rate=np.array(training['learning_rate']),
+        gamma=np.array(training['gamma']),
+        jaccard=np.array(training['jaccard']),
+        dice=np.array(training['dice']),
+        accuracy=np.array(training['accuracy']),
+        recall=np.array(training['recall'])
+    )
 
 if __name__ == '__main__':
     main()
