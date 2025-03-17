@@ -10,7 +10,8 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torch.backends.cudnn as cudnn
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
+import time
 from datetime import datetime
 
 cudnn.benchmark = True
@@ -20,21 +21,15 @@ def print_memory_usage(msg=""):
     print(f"{msg} Memory usage: {usage/1024:.2f} MB")
 
 def get_parser():
-    parser = argparse.ArgumentParser(description="Segmentation Training Script")
-    parser.add_argument("--num-epochs", default=1, type=int, help="Number of training epochs")
-    parser.add_argument("--batch-size", default=16, type=int, help="Batch size for training")
-    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root",
-                        help="Path to the single input ROOT file")
-    parser.add_argument("--img-size", default=512, type=int, help="Image size (square) in pixels")
-    parser.add_argument("--learning-rate", default=0.0001, type=float, help="Learning rate for the optimizer")
-    parser.add_argument("--target-labels", type=str, default="0,1,2,5",
-                        help="Comma-separated list of enum values to train with")
-    parser.add_argument("--num-planes", default=3, type=int, help="Number of image planes")
-    parser.add_argument("--checkpoint-directory", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation",
-                        help="Directory to save model checkpoints")
-    parser.add_argument("--loss-file", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/losses.npz",
-                        help="Output file to save loss and metric results")
-    parser.add_argument("--gamma", default=2.0, type=float, help="Gamma parameter for Focal Loss")
+    parser = argparse.ArgumentParser(description="UResNet")
+    parser.add_argument("--num-epochs", default=3, type=int)
+    parser.add_argument("--batch-size", default=64, type=int)
+    parser.add_argument("--learning-rate", default=0.1, type=float)
+    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
+    parser.add_argument("--img-size", default=512, type=int)
+    parser.add_argument("--target-labels", type=str, default="0,1,2,4")
+    parser.add_argument("--plane", type=int, choices=[0, 1, 2], required=True)
+    parser.add_argument("--output-dir", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation")
     return parser
 
 def maxpool():
@@ -70,7 +65,7 @@ class ConvBlock(nn.Module):
         x = self.conv2(x)
         x = self.norm2(x)
         return self.relu(x + identity)
-
+    
 class TransposeConvBlock(nn.Module):
     def __init__(self, c_in, c_out, k_size=3, k_pad=1):
         super(TransposeConvBlock, self).__init__()
@@ -82,12 +77,27 @@ class TransposeConvBlock(nn.Module):
         reinit_layer(self.block[0])
     def forward(self, x):
         return self.block(x)
+    
+class Sigmoid(nn.Module):
+    def __init__(self, out_range=None):
+        super(Sigmoid, self).__init__()
+        if out_range is not None:
+            self.low, self.high = out_range
+            self.range = self.high - self.low
+        else:
+            self.low = None
+            self.high = None
+            self.range = None
 
+    def forward(self, x):
+        if self.low is not None:
+            return torch.sigmoid(x) * (self.range) + self.low
+        else:
+            return torch.sigmoid(x)
+    
 class UNet(nn.Module):
-    def __init__(self, in_dim, num_classes, depth=4, n_filters=16, drop_prob=0.1, num_planes=3):
+    def __init__(self, in_dim, n_classes, depth=4, n_filters=16, drop_prob=0.1, y_range=None):
         super(UNet, self).__init__()
-        self.num_planes = num_planes
-        self.num_classes = num_classes
         self.ds_conv_1 = ConvBlock(in_dim, n_filters)
         self.ds_conv_2 = ConvBlock(n_filters, 2 * n_filters)
         self.ds_conv_3 = ConvBlock(2 * n_filters, 4 * n_filters)
@@ -113,7 +123,7 @@ class UNet(nn.Module):
         self.us_dropout_3 = dropout(drop_prob)
         self.us_dropout_2 = dropout(drop_prob)
         self.us_dropout_1 = dropout(drop_prob)
-        self.output = nn.Conv2d(n_filters, num_planes * num_classes, 1)
+        self.output = nn.Sequential(nn.Conv2d(n_filters, n_classes, 1), Sigmoid(y_range))
     def forward(self, x):
         res = x
         res = self.ds_conv_1(res); conv_stack_1 = res.clone()
@@ -146,22 +156,19 @@ class UNet(nn.Module):
         res = self.us_dropout_1(res)
         res = self.us_conv_1(res)
         res = self.output(res)
-        return res.view(x.size(0), self.num_planes, self.num_classes, x.size(2), x.size(3))
-
+        return res
+    
 class ImageDataset(Dataset):
-    def __init__(self, args, file):
+    def __init__(self, args):
         self.args = args
-        self.file_path = file
-        self.tree_name = "imageanalyser/ImageTree"
+        self.root_file = uproot.open(args.root_file, array_cache=None, num_workers=0)
+        self.tree = self.root_file["imageanalyser/ImageTree"]
+        self.plane = args.plane
         self.img_size = args.img_size
-        self.num_classes = args.num_classes
-        self.num_planes = args.num_planes
-        self.enum_to_model = {val: idx for idx, val in enumerate(args.target_labels)}
-        try:
-            self.root_file = uproot.open(self.file_path, array_cache=None, num_workers=0)
-        except Exception as e:
-            raise RuntimeError(f"Failed to open ROOT file '{self.file_path}': {e}")
-        self.tree = self.root_file[self.tree_name]
+        self.target_labels = [int(x) for x in args.target_labels.split(',')]
+        self.foreground_labels = [lbl for lbl in self.target_labels if lbl >= 2]
+        self.num_classes = len(self.foreground_labels)
+        self.enum_to_model = {val: idx for idx, val in enumerate(self.foreground_labels)}
         event_types = self.tree["type"].array(library="np")
         self.indices = np.where(event_types == 0)[0]
         self.num_events = len(self.indices)
@@ -169,258 +176,102 @@ class ImageDataset(Dataset):
         return self.num_events
     def __getitem__(self, idx):
         actual_idx = self.indices[idx]
-        try:
-            data = self.tree.arrays(
-                ["input", "truth", "run", "subrun", "event"],
-                entry_start=actual_idx, entry_stop=actual_idx + 1,
-                library="np"
-            )
-        except Exception as e:
-            print(f"Error fetching event {actual_idx}: {e}", file=sys.stderr)
-            raise
-        run = data["run"][0]
-        subrun = data["subrun"][0]
-        event = data["event"][0]
-        images = []
-        for plane in range(self.num_planes):
-            plane_iterable = data["input"][0][plane]
-            plane_array = np.fromiter(plane_iterable, dtype=np.float32, count=self.img_size * self.img_size)
-            images.append(plane_array.reshape(self.img_size, self.img_size))
-        images_tensor = torch.tensor(np.stack(images), dtype=torch.float32)
-        labels = []
-        for plane_idx in range(self.num_planes):
-            truth_iterable = data["truth"][0][plane_idx]
-            truth_array = np.fromiter(truth_iterable, dtype=np.int64, count=self.img_size * self.img_size)
-            labels.append(truth_array.reshape(self.img_size, self.img_size))
-        label_tensor = torch.tensor(np.stack(labels), dtype=torch.long)
-        remapped_labels = label_tensor.clone()
-        for enum_val, model_val in self.enum_to_model.items():
-            remapped_labels[label_tensor == enum_val] = model_val
-        mask = ~torch.isin(label_tensor, torch.tensor(list(self.enum_to_model.keys()), dtype=torch.long))
-        if mask.any():
-            remapped_labels[mask] = 1
-        return images_tensor, remapped_labels, run, subrun, event
+        data = self.tree.arrays(
+            ["input", "truth", "run", "subrun", "event"],
+            entry_start=actual_idx, entry_stop=actual_idx + 1,
+            library="np"
+        )
+        run, subrun, event = data["run"][0], data["subrun"][0], data["event"][0]
+        img = np.fromiter(data["input"][0][self.plane], dtype=np.float32).reshape(1, self.img_size, self.img_size)  
+        img = torch.from_numpy(img)
+        truth = np.fromiter(data["truth"][0][self.plane], dtype=np.int64).reshape(self.img_size, self.img_size)
+        masks = torch.zeros(self.num_classes, self.img_size, self.img_size, dtype=torch.float32)
+        for i, label in enumerate(self.foreground_labels):
+            masks[i] = torch.tensor(truth == label, dtype=torch.float32)
+        return img, masks, run, subrun, event
 
-class FocalLoss(nn.Module):
-    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None, reduction: str = 'mean'):
-        super(FocalLoss, self).__init__()
-        self.gamma = nn.Parameter(torch.tensor(gamma), requires_grad=True)
-        self.weight = weight
-        self.reduction = reduction
-    def forward(self, inp: torch.Tensor, targ: torch.Tensor) -> torch.Tensor:
-        ce_loss = F.cross_entropy(inp, targ, weight=self.weight, reduction='none')
-        p_t = torch.exp(-ce_loss)
-        loss = (1 - p_t) ** self.gamma * ce_loss
-        if self.reduction == 'mean':
-            return loss.mean()
-        elif self.reduction == 'sum':
-            return loss.sum()
-        return loss
+def compute_metrics(preds, targets, threshold=0.5):
+    preds = torch.sigmoid(preds) > threshold  
+    targets = targets.bool()
+    tp = (preds & targets).float().sum(dim=(2, 3))  
+    fp = (preds & ~targets).float().sum(dim=(2, 3))
+    fn = (~preds & targets).float().sum(dim=(2, 3))
+    tp = tp.sum(dim=0) 
+    fp = fp.sum(dim=0) 
+    fn = fn.sum(dim=0)
+    precision = tp / (tp + fp + 1e-6)
+    recall = tp / (tp + fn + 1e-6)
+    return precision, recall
 
-class FocalLossFlat(nn.Module):
-    def __init__(self, gamma: float = 2.0, weight: torch.Tensor = None, reduction: str = 'mean', axis: int = 2):
-        super(FocalLossFlat, self).__init__()
-        self.gamma = nn.Parameter(torch.tensor(gamma, dtype=torch.float32), requires_grad=True)
-        self.weight = weight
-        self.reduction = reduction
-        self.axis = axis
-
-    def forward(self, inp: torch.Tensor, targ: torch.Tensor) -> torch.Tensor:
-        if inp.dim() > 2:
-            dims = list(range(inp.dim()))  # inp: [batch_size, num_planes, num_classes, H, W]
-            dims.remove(self.axis)  # Remove 2: [0, 1, 2, 3, 4] -> [0, 1, 3, 4]
-            dims.append(self.axis)  # Append 2: [0, 1, 3, 4, 2]
-            inp = inp.permute(*dims)  # [8, 3, 512, 512, 5]
-            inp = inp.contiguous().view(-1, inp.size(-1))  # [8*3*512*512, 5]
-            targ = targ.view(-1)  # [8*3*512*512]
-        return FocalLoss(gamma=self.gamma, weight=self.weight, reduction=self.reduction)(inp, targ)
-    def decodes(self, x: torch.Tensor) -> torch.Tensor:
-        return x.argmax(dim=self.axis)
-    def activation(self, x: torch.Tensor) -> torch.Tensor:
-        return F.softmax(x, dim=self.axis)
-
-def computer_jaccard(pred, target, target_labels):
-    jaccards = []
-    for cls in target_labels:  
-        intersection = ((pred == cls) & (target == cls)).sum().item()
-        union = ((pred == cls) | (target == cls)).sum().item()
-        if union == 0:
-            jaccards.append(np.nan)
-        else:
-            jaccards.append(intersection / union)
-    return np.nanmean(jaccards)
-
-def compute_dice(pred, target, target_labels):
-    dices = []
-    for cls in target_labels:
-        pred_cls = (pred == cls)
-        target_cls = (target == cls)
-        intersection = (pred_cls & target_cls).sum().item()
-        denom = pred_cls.sum().item() + target_cls.sum().item()
-        if denom == 0:
-            dices.append(np.nan)
-        else:
-            dices.append((2 * intersection) / (denom + 1e-6))
-    return np.nanmean(dices)
-
-def compute_recall(pred, target, target_labels):
+def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args):
+    train_losses = []
+    valid_losses = []
+    learning_rates = []
+    precisions = []
     recalls = []
-    for cls in target_labels:
-        tp = ((pred == cls) & (target == cls)).sum().item()
-        fn = ((target == cls) & (pred != cls)).sum().item()
-        if (tp + fn) == 0:
-            recalls.append(np.nan)
-        else:
-            recalls.append(tp / (tp + fn))
-    return np.nanmean(recalls)
-
-def train_epoch(model, epoch, dataloader, optimiser, criterion, scheduler, device, args):
-    model.train()
-    train_loss, valid_loss, learning_rate = [], [], []
-    gamma_history, jaccard_history, dice_history = [], [], []
-    accuracy_history, recall_history = [], []
-    model_to_enum = {idx: val for idx, val in enumerate(args.target_labels)}
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for batch, (images, masks, _, _, _) in enumerate(dataloader):
-        images, masks = images.to(device), masks.to(device)
-        half = images.size(0) // 2
-        train_images, valid_images = images[:half], images[half:]
-        train_masks, valid_masks = masks[:half], masks[half:]
-        optimiser.zero_grad()
-        train_outputs = model(train_images)
-        loss_val = criterion(train_outputs, train_masks)
-        loss_val.backward()
-        model.eval()
-        with torch.no_grad():
-            valid_outputs = model(valid_images)
-            val_loss_val = criterion(valid_outputs, valid_masks)
-            preds = criterion.decodes(valid_outputs)  
-            preds_np = preds.cpu().numpy()
-            preds_enum = np.vectorize(model_to_enum.get)(preds_np)
-            masks_np = valid_masks.cpu().numpy()
-            num_planes = preds_np.shape[1]
-            jaccard_per_plane = []
-            dice_per_plane = []
-            acc_per_plane = []
-            recall_per_plane = []
-            for plane in range(num_planes):
-                jaccard_plane = []
-                dice_plane = []
-                acc_plane = []
-                recall_plane = []
-                for sample in range(preds_np.shape[0]):
-                    jaccard_plane.append(computer_jaccard(preds_enum[sample, plane],
-                                                         masks_np[sample, plane],
-                                                         args.target_labels))
-                    dice_plane.append(compute_dice(preds_enum[sample, plane],
-                                                  masks_np[sample, plane],
-                                                  args.target_labels))
-                    acc_plane.append(np.mean(preds_enum[sample, plane] == masks_np[sample, plane]))
-                    recall_plane.append(compute_recall(preds_enum[sample, plane],
-                                                      masks_np[sample, plane],
-                                                      args.target_labels))
-                jaccard_per_plane.append(np.nanmean(jaccard_plane))
-                dice_per_plane.append(np.nanmean(dice_plane))
-                acc_per_plane.append(np.nanmean(acc_plane))
-                recall_per_plane.append(np.nanmean(recall_plane))
-        model.train()
-        optimiser.step()
-        scheduler.step()
-        train_loss.append(loss_val.item())
-        valid_loss.append(val_loss_val.item())
-        learning_rate.append(optimiser.param_groups[0]['lr'])
-        gamma_history.append(criterion.gamma.item())
-        jaccard_history.append(jaccard_per_plane)
-        dice_history.append(dice_per_plane)
-        accuracy_history.append(acc_per_plane)
-        recall_history.append(recall_per_plane)
-        
-        if batch % 10 == 0:
-            print(f"Batch {batch:03d} | Train Loss: {loss_val.item():.4f} | Val Loss: {val_loss_val.item():.4f}")
-            print(f"   Per-plane metrics: Jaccard: {jaccard_per_plane}, Dice: {dice_per_plane}")
-            print(f"                      Accuracy: {acc_per_plane}, Recall: {recall_per_plane}")
-            print_memory_usage(f'[Batch {batch}] Memory usage:')
-
-        if batch % 1000 == 0:
-            model.eval()
-            dummy_input = torch.randn(1, 3, args.img_size, args.img_size).to(device)
-            traced_model = torch.jit.trace(model, dummy_input)
-            ts_model_path = os.path.join(args.checkpoint_directory, f"unet_epoch{epoch}_batch{batch}_{timestamp}_torchscript.pt")
-            ts_labels_path = os.path.join(args.checkpoint_directory, f"target_labels_epoch{epoch}_batch{batch}_{timestamp}.pth")
-            traced_model.save(ts_model_path)
-            torch.save(args.target_labels, ts_labels_path)
-            print(f"Saved checkpoint: {ts_model_path}")
-            print(f"Saved target labels: {ts_labels_path}")
+    for epoch in range(args.num_epochs):
+        for batch, (images, masks, _, _, _) in enumerate(dataloader):
+            split_idx = int(0.5 * images.size(0))
+            train_images = images[:split_idx]
+            train_masks = masks[:split_idx]
+            valid_images = images[split_idx:]
+            valid_masks = masks[split_idx:]
             model.train()
-        torch.cuda.empty_cache()
-
-    return (train_loss, valid_loss, learning_rate, gamma_history, 
-            jaccard_history, dice_history, accuracy_history, recall_history)
-
-def get_dataloader(args):
-    file = args.root_file
-    dataset = ImageDataset(args, file)
-    return DataLoader(dataset, batch_size=args.batch_size, num_workers=0, shuffle=True, pin_memory=True)
+            train_images, train_masks = train_images.to(device), train_masks.to(device)
+            optimiser.zero_grad()
+            outputs = model(train_images)
+            loss = criterion(outputs, train_masks)
+            loss.backward()
+            optimiser.step()
+            train_losses.append(loss.item())
+            model.eval()
+            with torch.no_grad():
+                valid_images, valid_masks = valid_images.to(device), valid_masks.to(device)
+                valid_outputs = model(valid_images)
+                valid_loss = criterion(valid_outputs, valid_masks).item()
+                valid_losses.append(valid_loss)
+            cosine_scheduler.step()
+            learning_rates.append(cosine_scheduler.get_last_lr()[0])
+            precision, recall = compute_metrics(valid_outputs, valid_masks)
+            precisions.append(precision.cpu().numpy())
+            recalls.append(recall.cpu().numpy())
+            if batch % 1 == 0:
+                print(f"Epoch {epoch}, Batch {batch}: Train Loss = {loss.item():.4f}, Valid Loss = {valid_loss:.4f}, "
+                      f"Learning Rate = {learning_rates[-1]:.6f}, Precision = {precisions[-1]}, Recall = {recalls[-1]}")
+            if batch % 100 == 0:
+                model.eval()
+                example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
+                traced_model = torch.jit.trace(model, example_input)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{batch}_{timestamp}_ts.pt"))
+        step_scheduler.step()
+    return train_losses, valid_losses, learning_rates, precisions, recalls
 
 def main():
-    parser = get_parser()
-    args = parser.parse_args()
+    args = get_parser().parse_args()
     target_labels = [int(x) for x in args.target_labels.split(',')]
-    args.num_classes = len(target_labels)
-    args.target_labels = target_labels
-    os.makedirs(args.checkpoint_directory, exist_ok=True)
+    args.num_classes = len([lbl for lbl in target_labels if lbl >= 2])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if torch.cuda.is_available():
-        torch.cuda.reset_peak_memory_stats(device)
-    dataloader = get_dataloader(args)
-    model = UNet(
-        in_dim=3,
-        num_classes=args.num_classes,
-        depth=4,
-        n_filters=16,
-        drop_prob=0.1,
-        num_planes=args.num_planes
-    ).to(device)
-    criterion = FocalLossFlat(gamma=args.gamma, reduction='mean', axis=2)
-    optimiser = Adam(list(model.parameters()) + list(criterion.parameters()), lr=args.learning_rate)
-    scheduler = CosineAnnealingLR(optimiser, T_max=args.num_epochs, eta_min=1e-6)
-    
-    training = {
-        'train_loss': [],
-        'valid_loss': [],
-        'learning_rate': [],
-        'gamma': [],
-        'jaccard': [],
-        'dice': [],
-        'accuracy': [],
-        'recall': []
-    }
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    for epoch in range(args.num_epochs):
-        (t_loss, v_loss, lrs, gma, jaccards, dices, accs, recs) = train_epoch(model, epoch, dataloader, optimiser, criterion, scheduler, device, args)
-        training['train_loss'].extend(t_loss)
-        training['valid_loss'].extend(v_loss)
-        training['learning_rate'].extend(lrs)
-        training['gamma'].extend(gma)
-        training['jaccard'].extend(jaccards)
-        training['dice'].extend(dices)
-        training['accuracy'].extend(accs)
-        training['recall'].extend(recs)
-        torch.cuda.empty_cache()
-        
-    loss_file_with_timestamp = args.loss_file.replace(".npz", f"_{timestamp}.npz")
-    np.savez(
-        loss_file_with_timestamp,
-        train_loss=np.array(training['train_loss']),
-        valid_loss=np.array(training['valid_loss']),
-        learning_rate=np.array(training['learning_rate']),
-        gamma=np.array(training['gamma']),
-        jaccard=np.array(training['jaccard']),
-        dice=np.array(training['dice']),
-        accuracy=np.array(training['accuracy']),
-        recall=np.array(training['recall'])
+    dataset = ImageDataset(args)
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
+    model = UNet(in_dim=1, n_classes=args.num_classes, depth=4, n_filters=16, drop_prob=0.1).to(device)
+    criterion = nn.BCELoss()
+    optimiser = Adam(model.parameters(), lr=args.learning_rate)
+    step_scheduler = StepLR(optimiser, step_size=len(dataloader), gamma=0.1)
+    cosine_scheduler = CosineAnnealingLR(optimiser, T_max=len(dataloader), eta_min=1e-6)
+    os.makedirs(args.output_dir, exist_ok=True)
+    train_losses, valid_losses, learning_rates, precisions, recalls = train_model(
+        model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args
     )
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    np.savez(os.path.join(args.output_dir, f"loss_{timestamp}.npz"),
+             step_train_losses=train_losses,
+             step_valid_losses=valid_losses,
+             step_learning_rates=learning_rates,
+             step_precisions=precisions,
+             step_recalls=recalls)
+    label_mapping = {str(k): v for k, v in dataset.enum_to_model.items()}
+    np.savez(os.path.join(args.output_dir, f"label_mapping_plane{args.plane}.npz"), **label_mapping)
 
 if __name__ == '__main__':
     main()
