@@ -42,3 +42,5 @@ logs/
 checkpoints/
 *.pth
 out/
+
+.vscode/
