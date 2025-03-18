@@ -22,7 +22,7 @@ def print_memory_usage(msg=""):
 
 def get_parser():
     parser = argparse.ArgumentParser(description="UResNet")
-    parser.add_argument("--num-epochs", default=3, type=int)
+    parser.add_argument("--num-epochs", default=11, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
     parser.add_argument("--learning-rate", default=0.1, type=float)
     parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
@@ -190,26 +190,32 @@ class ImageDataset(Dataset):
             masks[i] = torch.tensor(truth == label, dtype=torch.float32)
         return img, masks, run, subrun, event
 
-def compute_metrics(preds, targets, threshold=0.5):
-    preds = torch.sigmoid(preds) > threshold  
-    targets = targets.bool()
-    tp = (preds & targets).float().sum(dim=(2, 3))  
-    fp = (preds & ~targets).float().sum(dim=(2, 3))
-    fn = (~preds & targets).float().sum(dim=(2, 3))
-    tp = tp.sum(dim=0) 
-    fp = fp.sum(dim=0) 
-    fn = fn.sum(dim=0)
-    precision = tp / (tp + fp + 1e-6)
-    recall = tp / (tp + fn + 1e-6)
-    return precision, recall
+def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7]):
+    precision_dict = {t: [] for t in thresholds}
+    recall_dict = {t: [] for t in thresholds}
+    for t in thresholds:
+        preds_t = torch.sigmoid(preds) > t
+        targets = targets.bool()
+        tp = (preds_t & targets).float().sum(dim=(2, 3))
+        fp = (preds_t & ~targets).float().sum(dim=(2, 3))
+        fn = (~preds_t & targets).float().sum(dim=(2, 3))
+        tp = tp.sum(dim=0)
+        fp = fp.sum(dim=0)
+        fn = fn.sum(dim=0)
+        precision = tp / (tp + fp + 1e-6)
+        recall = tp / (tp + fn + 1e-6)
+        precision_dict[t] = precision
+        recall_dict[t] = recall
+    return precision_dict, recall_dict
 
 def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args):
     train_losses = []
     valid_losses = []
     learning_rates = []
-    precisions = []
-    recalls = []
+    precisions = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: []}
+    recalls = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: []}
     for epoch in range(args.num_epochs):
+        cosine_scheduler = CosineAnnealingLR(optimiser, T_max=len(dataloader), eta_min=1e-6)
         for batch, (images, masks, _, _, _) in enumerate(dataloader):
             split_idx = int(0.5 * images.size(0))
             train_images = images[:split_idx]
@@ -218,26 +224,32 @@ def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_
             valid_masks = masks[split_idx:]
             model.train()
             train_images, train_masks = train_images.to(device), train_masks.to(device)
+            valid_images, valid_masks = valid_images.to(device), valid_masks.to(device)
             optimiser.zero_grad()
-            outputs = model(train_images)
-            loss = criterion(outputs, train_masks)
-            loss.backward()
-            optimiser.step()
-            train_losses.append(loss.item())
+            train_outputs = model(train_images)
+            train_loss = criterion(train_outputs, train_masks)
+            train_losses.append(train_loss.item())
             model.eval()
             with torch.no_grad():
-                valid_images, valid_masks = valid_images.to(device), valid_masks.to(device)
                 valid_outputs = model(valid_images)
                 valid_loss = criterion(valid_outputs, valid_masks).item()
                 valid_losses.append(valid_loss)
+            model.train()
+            train_loss.backward()
+            optimiser.step()
             cosine_scheduler.step()
-            learning_rates.append(cosine_scheduler.get_last_lr()[0])
-            precision, recall = compute_metrics(valid_outputs, valid_masks)
-            precisions.append(precision.cpu().numpy())
-            recalls.append(recall.cpu().numpy())
+            learning_rates.append(optimiser.param_groups[0]['lr'])
+            precision_dict, recall_dict = compute_metrics(valid_outputs, valid_masks)
+            for t in precision_dict:
+                precisions[t].append(precision_dict[t].cpu().numpy())
+                recalls[t].append(recall_dict[t].cpu().numpy())
             if batch % 1 == 0:
-                print(f"Epoch {epoch}, Batch {batch}: Train Loss = {loss.item():.4f}, Valid Loss = {valid_loss:.4f}, "
-                      f"Learning Rate = {learning_rates[-1]:.6f}, Precision = {precisions[-1]}, Recall = {recalls[-1]}")
+                print(f"Epoch {epoch}, Batch {batch}: Train Loss = {train_loss.item():.4f}, Valid Loss = {valid_loss:.4f}, "
+                      f"Learning Rate = {learning_rates[-1]:.6f}, " 
+                      f"Precision (0.3) = {precisions[0.3][-1]}, Recall (0.3) = {recalls[0.3][-1]}, "
+                      f"Precision (0.4) = {precisions[0.4][-1]}, Recall (0.4) = {recalls[0.4][-1]}, "
+                      f"Precision (0.5) = {precisions[0.5][-1]}, Recall (0.5) = {recalls[0.5][-1]}, "
+                      f"Precision (0.6) = {precisions[0.6][-1]}, Recall (0.6) = {recalls[0.6][-1]}.")
             if batch % 100 == 0:
                 model.eval()
                 example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
@@ -245,6 +257,11 @@ def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{batch}_{timestamp}_ts.pt"))
         step_scheduler.step()
+        model.eval() 
+        example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
+        traced_model = torch.jit.trace(model, example_input) 
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{timestamp}_ts.pt"))
     return train_losses, valid_losses, learning_rates, precisions, recalls
 
 def main():
@@ -268,8 +285,16 @@ def main():
              step_train_losses=train_losses,
              step_valid_losses=valid_losses,
              step_learning_rates=learning_rates,
-             step_precisions=precisions,
-             step_recalls=recalls)
+             step_precisions_03=precisions[0.3],
+             step_precisions_04=precisions[0.4],
+             step_precisions_05=precisions[0.5],
+             step_precisions_06=precisions[0.6],
+             step_precisions_07=precisions[0.7],
+             step_recalls_03=recalls[0.3],
+             step_recalls_04=recalls[0.4],
+             step_recalls_05=recalls[0.5],
+             step_recalls_06=recalls[0.6],
+             step_recalls_07=recalls[0.7])
     label_mapping = {str(k): v for k, v in dataset.enum_to_model.items()}
     np.savez(os.path.join(args.output_dir, f"label_mapping_plane{args.plane}.npz"), **label_mapping)
 
