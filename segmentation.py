@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torch.backends.cudnn as cudnn
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, CosineAnnealingWarmRestarts
 import time
 from datetime import datetime
 
@@ -22,9 +22,9 @@ def print_memory_usage(msg=""):
 
 def get_parser():
     parser = argparse.ArgumentParser(description="UResNet")
-    parser.add_argument("--num-epochs", default=11, type=int)
+    parser.add_argument("--num-epochs", default=10, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--learning-rate", default=0.1, type=float)
+    parser.add_argument("--learning-rate", default=0.01, type=float)
     parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
     parser.add_argument("--img-size", default=512, type=int)
     parser.add_argument("--target-labels", type=str, default="0,1,2,4")
@@ -123,7 +123,7 @@ class UNet(nn.Module):
         self.us_dropout_3 = dropout(drop_prob)
         self.us_dropout_2 = dropout(drop_prob)
         self.us_dropout_1 = dropout(drop_prob)
-        self.output = nn.Sequential(nn.Conv2d(n_filters, n_classes, 1), Sigmoid(y_range))
+        self.output = nn.Conv2d(n_filters, n_classes, 1)
     def forward(self, x):
         res = x
         res = self.ds_conv_1(res); conv_stack_1 = res.clone()
@@ -209,6 +209,8 @@ def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7]):
     return precision_dict, recall_dict
 
 def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args):
+    cosine_scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=1, eta_min=1e-6)
+    step_scheduler = StepLR(optimiser, step_size=1, gamma=0.1)
     train_losses = []
     valid_losses = []
     learning_rates = []
@@ -264,6 +266,25 @@ def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_
         traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{timestamp}_ts.pt"))
     return train_losses, valid_losses, learning_rates, precisions, recalls
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gamma=2.0, reduction='sum'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha 
+        self.gamma = gamma  
+        self.reduction = reduction 
+
+    def forward(self, inputs, targets):
+        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
+        pt = torch.exp(-BCE_loss)
+        F_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
+        
+        if self.reduction == 'mean':
+            return F_loss.mean()
+        elif self.reduction == 'sum':
+            return F_loss.sum()
+        else:
+            return F_loss
+
 def main():
     args = get_parser().parse_args()
     target_labels = [int(x) for x in args.target_labels.split(',')]
@@ -272,10 +293,11 @@ def main():
     dataset = ImageDataset(args)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
     model = UNet(in_dim=1, n_classes=args.num_classes, depth=4, n_filters=16, drop_prob=0.1).to(device)
-    criterion = nn.BCELoss()
+    #criterion = nn.BCEWithLogitsLoss()
+    criterion = FocalLoss(alpha=0.25, gamma=2.0, reduction='sum')
     optimiser = Adam(model.parameters(), lr=args.learning_rate)
-    step_scheduler = StepLR(optimiser, step_size=len(dataloader), gamma=0.1)
-    cosine_scheduler = CosineAnnealingLR(optimiser, T_max=len(dataloader), eta_min=1e-6)
+    step_scheduler = StepLR(optimiser, step_size=1, gamma=0.1) 
+    cosine_scheduler = None
     os.makedirs(args.output_dir, exist_ok=True)
     train_losses, valid_losses, learning_rates, precisions, recalls = train_model(
         model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args
