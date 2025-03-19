@@ -78,23 +78,6 @@ class TransposeConvBlock(nn.Module):
     def forward(self, x):
         return self.block(x)
     
-class Sigmoid(nn.Module):
-    def __init__(self, out_range=None):
-        super(Sigmoid, self).__init__()
-        if out_range is not None:
-            self.low, self.high = out_range
-            self.range = self.high - self.low
-        else:
-            self.low = None
-            self.high = None
-            self.range = None
-
-    def forward(self, x):
-        if self.low is not None:
-            return torch.sigmoid(x) * (self.range) + self.low
-        else:
-            return torch.sigmoid(x)
-    
 class UNet(nn.Module):
     def __init__(self, in_dim, n_classes, depth=4, n_filters=16, drop_prob=0.1, y_range=None):
         super(UNet, self).__init__()
@@ -183,6 +166,7 @@ class ImageDataset(Dataset):
         )
         run, subrun, event = data["run"][0], data["subrun"][0], data["event"][0]
         img = np.fromiter(data["input"][0][self.plane], dtype=np.float32).reshape(1, self.img_size, self.img_size)  
+        img = np.log1p(img)
         img = torch.from_numpy(img)
         truth = np.fromiter(data["truth"][0][self.plane], dtype=np.int64).reshape(self.img_size, self.img_size)
         masks = torch.zeros(self.num_classes, self.img_size, self.img_size, dtype=torch.float32)
@@ -190,7 +174,7 @@ class ImageDataset(Dataset):
             masks[i] = torch.tensor(truth == label, dtype=torch.float32)
         return img, masks, run, subrun, event
 
-def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7]):
+def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]):
     precision_dict = {t: [] for t in thresholds}
     recall_dict = {t: [] for t in thresholds}
     for t in thresholds:
@@ -208,16 +192,14 @@ def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7]):
         recall_dict[t] = recall
     return precision_dict, recall_dict
 
-def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args):
-    cosine_scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=1, eta_min=1e-6)
-    step_scheduler = StepLR(optimiser, step_size=1, gamma=0.1)
+def train_model(model, dataloader, optimiser, criterion, device, args):
+    scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=2, eta_min=0)
     train_losses = []
     valid_losses = []
     learning_rates = []
-    precisions = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: []}
-    recalls = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: []}
+    precisions = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
+    recalls = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
     for epoch in range(args.num_epochs):
-        cosine_scheduler = CosineAnnealingLR(optimiser, T_max=len(dataloader), eta_min=1e-6)
         for batch, (images, masks, _, _, _) in enumerate(dataloader):
             split_idx = int(0.5 * images.size(0))
             train_images = images[:split_idx]
@@ -238,9 +220,9 @@ def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_
                 valid_losses.append(valid_loss)
             model.train()
             train_loss.backward()
-            optimiser.step()
-            cosine_scheduler.step()
-            learning_rates.append(optimiser.param_groups[0]['lr'])
+            learning_rates.append(scheduler.get_last_lr()[0])
+            optimiser.step() 
+            scheduler.step() 
             precision_dict, recall_dict = compute_metrics(valid_outputs, valid_masks)
             for t in precision_dict:
                 precisions[t].append(precision_dict[t].cpu().numpy())
@@ -251,14 +233,17 @@ def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_
                       f"Precision (0.3) = {precisions[0.3][-1]}, Recall (0.3) = {recalls[0.3][-1]}, "
                       f"Precision (0.4) = {precisions[0.4][-1]}, Recall (0.4) = {recalls[0.4][-1]}, "
                       f"Precision (0.5) = {precisions[0.5][-1]}, Recall (0.5) = {recalls[0.5][-1]}, "
-                      f"Precision (0.6) = {precisions[0.6][-1]}, Recall (0.6) = {recalls[0.6][-1]}.")
+                      f"Precision (0.6) = {precisions[0.6][-1]}, Recall (0.6) = {recalls[0.6][-1]}, "
+                      f"Precision (0.7) = {precisions[0.7][-1]}, Recall (0.7) = {recalls[0.7][-1]}, "
+                      f"Precision (0.8) = {precisions[0.8][-1]}, Recall (0.8) = {recalls[0.8][-1]}, "
+                      f"Precision (0.9) = {precisions[0.9][-1]}, Recall (0.9) = {recalls[0.9][-1]}, "
+                      )
             if batch % 100 == 0:
                 model.eval()
                 example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
                 traced_model = torch.jit.trace(model, example_input)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{batch}_{timestamp}_ts.pt"))
-        step_scheduler.step()
         model.eval() 
         example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
         traced_model = torch.jit.trace(model, example_input) 
@@ -266,24 +251,20 @@ def train_model(model, dataloader, optimiser, criterion, step_scheduler, cosine_
         traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{timestamp}_ts.pt"))
     return train_losses, valid_losses, learning_rates, precisions, recalls
 
+
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=0.25, gamma=2.0, reduction='sum'):
+    def __init__(self, gamma=2.0, reduction='mean'):
         super(FocalLoss, self).__init__()
-        self.alpha = alpha 
-        self.gamma = gamma  
-        self.reduction = reduction 
+        self.gamma = gamma
+        self.reduction = reduction
 
     def forward(self, inputs, targets):
         BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
         pt = torch.exp(-BCE_loss)
-        F_loss = self.alpha * (1 - pt) ** self.gamma * BCE_loss
-        
+        F_loss = (1 - pt) ** self.gamma * BCE_loss
         if self.reduction == 'mean':
             return F_loss.mean()
-        elif self.reduction == 'sum':
-            return F_loss.sum()
-        else:
-            return F_loss
+        return F_loss
 
 def main():
     args = get_parser().parse_args()
@@ -294,13 +275,11 @@ def main():
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
     model = UNet(in_dim=1, n_classes=args.num_classes, depth=4, n_filters=16, drop_prob=0.1).to(device)
     #criterion = nn.BCEWithLogitsLoss()
-    criterion = FocalLoss(alpha=0.25, gamma=2.0, reduction='sum')
+    criterion = FocalLoss(gamma=8.0, reduction='mean')
     optimiser = Adam(model.parameters(), lr=args.learning_rate)
-    step_scheduler = StepLR(optimiser, step_size=1, gamma=0.1) 
-    cosine_scheduler = None
     os.makedirs(args.output_dir, exist_ok=True)
     train_losses, valid_losses, learning_rates, precisions, recalls = train_model(
-        model, dataloader, optimiser, criterion, step_scheduler, cosine_scheduler, device, args
+        model, dataloader, optimiser, criterion, device, args
     )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     np.savez(os.path.join(args.output_dir, f"loss_{timestamp}.npz"),
