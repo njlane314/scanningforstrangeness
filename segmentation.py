@@ -192,14 +192,20 @@ def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.
         recall_dict[t] = recall
     return precision_dict, recall_dict
 
-def train_model(model, dataloader, optimiser, criterion, device, args):
+def train_model(model, dataloader, optimiser, device, args):
     scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=2, eta_min=0)
     train_losses = []
     valid_losses = []
     learning_rates = []
     precisions = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
     recalls = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
+    cumulative_class_counts = torch.zeroes(args.num_classes, deveice=device) 
+    cumulative_total_pixels = 0
     for epoch in range(args.num_epochs):
+        if epoch > 0:
+            pos_weight = (cumulative_total_pixels - cumulative_class_counts) / (cumulative_class_counts + 1e-6)
+        else:
+            pos_weight = torch.ones(args.num_classes, device=device)
         for batch, (images, masks, _, _, _) in enumerate(dataloader):
             split_idx = int(0.5 * images.size(0))
             train_images = images[:split_idx]
@@ -211,18 +217,22 @@ def train_model(model, dataloader, optimiser, criterion, device, args):
             valid_images, valid_masks = valid_images.to(device), valid_masks.to(device)
             optimiser.zero_grad()
             train_outputs = model(train_images)
-            train_loss = criterion(train_outputs, train_masks)
+            train_loss = F.binary_cross_entropy_with_logits(train_outputs, train_masks, pos_weight=pos_weight)
             train_losses.append(train_loss.item())
             model.eval()
             with torch.no_grad():
                 valid_outputs = model(valid_images)
-                valid_loss = criterion(valid_outputs, valid_masks).item()
+                valid_loss = F.binary_cross_entropy_with_logits(valid_outputs, valid_masks, pos_weight=pos_weight).item()
                 valid_losses.append(valid_loss)
             model.train()
             train_loss.backward()
             learning_rates.append(scheduler.get_last_lr()[0])
             optimiser.step() 
             scheduler.step() 
+            batch_class_counts = train_masks.sum(dim=[0, 2, 3])
+            cumulative_class_counts += batch_class_counts
+            batch_total_pixels = train_masks.size(0) * train_masks.size(2) * train_masks.size(3)
+            cumulative_total_pixels += batch_total_pixels
             precision_dict, recall_dict = compute_metrics(valid_outputs, valid_masks)
             for t in precision_dict:
                 precisions[t].append(precision_dict[t].cpu().numpy())
@@ -251,21 +261,6 @@ def train_model(model, dataloader, optimiser, criterion, device, args):
         traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{timestamp}_ts.pt"))
     return train_losses, valid_losses, learning_rates, precisions, recalls
 
-
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-        pt = torch.exp(-BCE_loss)
-        F_loss = (1 - pt) ** self.gamma * BCE_loss
-        if self.reduction == 'mean':
-            return F_loss.mean()
-        return F_loss
-
 def main():
     args = get_parser().parse_args()
     target_labels = [int(x) for x in args.target_labels.split(',')]
@@ -274,12 +269,11 @@ def main():
     dataset = ImageDataset(args)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
     model = UNet(in_dim=1, n_classes=args.num_classes, depth=4, n_filters=16, drop_prob=0.1).to(device)
-    #criterion = nn.BCEWithLogitsLoss()
-    criterion = FocalLoss(gamma=8.0, reduction='mean')
+    #criterion = FocalLoss(gamma=8.0, reduction='mean')
     optimiser = Adam(model.parameters(), lr=args.learning_rate)
     os.makedirs(args.output_dir, exist_ok=True)
     train_losses, valid_losses, learning_rates, precisions, recalls = train_model(
-        model, dataloader, optimiser, criterion, device, args
+        model, dataloader, optimiser, device, args
     )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     np.savez(os.path.join(args.output_dir, f"loss_{timestamp}.npz"),
