@@ -130,6 +130,10 @@ class Visualiser:
         ])
         assert truth_data_np.shape == (3, 512, 512), f"Expected shape (3, 512, 512), got {truth_data_np.shape}"
 
+        colors = [0, 865, ROOT.kTeal-1, ROOT.kRed, ROOT.kOrange, ROOT.kYellow, ROOT.kBlue]
+        colors_np = np.array(colors, dtype=np.int32)
+        ROOT.gStyle.SetPalette(len(colors), colors_np)
+
         for plane in range(num_planes):
             seg_mask = truth_data_np[plane]
             unique_labels = np.unique(seg_mask)
@@ -144,7 +148,7 @@ class Visualiser:
             c_truth = ROOT.TCanvas(f"c_truth_{plane}", title, 1200, 1200)
             c_truth.SetFillColor(ROOT.kWhite)
             c_truth.SetLeftMargin(0.08)
-            c_truth.SetRightMargin(0.08)
+            c_truth.SetRightMargin(0.08)  
             c_truth.SetBottomMargin(0.08)
             c_truth.SetTopMargin(0.08)
 
@@ -172,10 +176,11 @@ class Visualiser:
             h_truth.GetYaxis().SetTickLength(0)
             h_truth.GetXaxis().CenterTitle()
             h_truth.GetYaxis().CenterTitle()
-            h_truth.SetMinimum(0)  
-            h_truth.SetMaximum(np.max(seg_mask))  
+            h_truth.SetMinimum(0)
+            h_truth.SetMaximum(np.max(seg_mask))
 
             h_truth.Draw("COL")
+
             c_truth.Update()
             c_truth.SaveAs(os.path.join(output_dir, f"truth_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
 
