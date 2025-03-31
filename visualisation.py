@@ -41,13 +41,13 @@ class ImageDataset:
         return input_data, truth_data, run, subrun, event
 
 @dataclass
-class VisualizationConfig:
+class VisualisationConfig:
     PLANE_NAMES: List[str] = None
     OVERLAY_COLORS: Dict[int, str] = None
     LEGEND_LABELS: Dict[int, str] = None
 
 class Visualiser:
-    def __init__(self, num_classes: int, width: int, height: int, foreground_labels: List[int], vis_config: VisualizationConfig):
+    def __init__(self, num_classes: int, width: int, height: int, foreground_labels: List[int], vis_config: VisualisationConfig):
         self.num_classes = num_classes
         self.width = width
         self.height = height
@@ -128,9 +128,8 @@ class Visualiser:
             np.fromiter(vec, dtype=np.float32, count=self.height * self.width).reshape(self.height, self.width)
             for vec in truth_data
         ])
-        assert truth_data_np.shape == (3, 512, 512), f"Expected shape (3, 512, 512), got {truth_data_np.shape}"
 
-        colors = [0, 865, ROOT.kTeal-1, ROOT.kRed, ROOT.kOrange, ROOT.kYellow, ROOT.kBlue]
+        colors = [0, 2, 3, 4, 5, 6, 7, 8, 9]
         colors_np = np.array(colors, dtype=np.int32)
         ROOT.gStyle.SetPalette(len(colors), colors_np)
 
@@ -138,8 +137,6 @@ class Visualiser:
             seg_mask = truth_data_np[plane]
             unique_labels = np.unique(seg_mask)
             print(f"Plane {plane} unique labels: {unique_labels}")
-            if not np.all(np.mod(seg_mask, 1) == 0):
-                print(f"Warning: Non-integer values in truth data for plane {plane}, converting to int")
             seg_mask = seg_mask.astype(np.int64)
 
             plane_name = self.vis_config.PLANE_NAMES[plane]
@@ -178,7 +175,6 @@ class Visualiser:
             h_truth.GetYaxis().CenterTitle()
             h_truth.SetMinimum(0)
             h_truth.SetMaximum(np.max(seg_mask))
-
             h_truth.Draw("COL")
 
             c_truth.Update()
@@ -200,7 +196,7 @@ def main():
     foreground_labels = [int(k) for k in label_mapping.keys()]
     
     dataset = ImageDataset(args, args.root_file, foreground_labels)
-    vis_config = VisualizationConfig()
+    vis_config = VisualisationConfig()
     visualiser = Visualiser(
         num_classes=len(foreground_labels),
         width=args.img_size,
