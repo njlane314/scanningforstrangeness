@@ -52,6 +52,7 @@ class Visualiser:
         self.width = width
         self.height = height
         self.foreground_labels = foreground_labels
+        self.enum_to_model = {val: idx for idx, val in enumerate(foreground_labels)}
         self.vis_config = vis_config
         self.vis_config.PLANE_NAMES = ["U", "V", "W"]
         color_list = ["#00FFFF", "#FF00FF", "#FFFF00", "#00FF00", "#FFA500", "#FF0000"]
@@ -129,32 +130,26 @@ class Visualiser:
             for vec in truth_data
         ])
 
-        colors = [0, 2, 3, 4, 5, 6, 7, 8, 9]
-        colors_np = np.array(colors, dtype=np.int32)
-        ROOT.gStyle.SetPalette(len(colors), colors_np)
-
         for plane in range(num_planes):
             seg_mask = truth_data_np[plane]
             unique_labels = np.unique(seg_mask)
             print(f"Plane {plane} unique labels: {unique_labels}")
             seg_mask = seg_mask.astype(np.int64)
-
+            cosmic_value = len(self.foreground_labels) + 1
+            remapped = np.vectorize(lambda x: 0 if x == 0 else (self.enum_to_model[x] + 1 if x in self.enum_to_model else cosmic_value))(seg_mask)
             plane_name = self.vis_config.PLANE_NAMES[plane]
             title = f"Plane {plane_name} Truth (Run {r}, Subrun {sr}, Event {evnum})"
-
             c_truth = ROOT.TCanvas(f"c_truth_{plane}", title, 1200, 1200)
             c_truth.SetFillColor(ROOT.kWhite)
             c_truth.SetLeftMargin(0.08)
-            c_truth.SetRightMargin(0.08)  
+            c_truth.SetRightMargin(0.08)
             c_truth.SetBottomMargin(0.08)
             c_truth.SetTopMargin(0.08)
-
             h_truth = ROOT.TH2F(f"h_truth_{plane}", title, self.width, 0, self.width, self.height, 0, self.height)
             h_truth.Reset()
             for i in range(self.width):
                 for j in range(self.height):
-                    h_truth.SetBinContent(i + 1, j + 1, seg_mask[j, i])
-
+                    h_truth.SetBinContent(i + 1, j + 1, remapped[j, i])
             h_truth.GetXaxis().SetTitle("Local Drift Time")
             h_truth.GetYaxis().SetTitle("Local Wire Coord")
             h_truth.GetXaxis().SetTitleOffset(1.0)
@@ -173,9 +168,26 @@ class Visualiser:
             h_truth.GetYaxis().SetTickLength(0)
             h_truth.GetXaxis().CenterTitle()
             h_truth.GetYaxis().CenterTitle()
-            h_truth.SetMinimum(0)
-            h_truth.SetMaximum(np.max(seg_mask))
+
+            palette = [ROOT.kWhite]
+            for label in self.foreground_labels:
+                hex_color = self.vis_config.OVERLAY_COLORS[label]
+                root_color = ROOT.TColor.GetColor(hex_color)
+                palette.append(root_color)
+            cosmic_color = ROOT.TColor.GetColor("#808080")
+            palette.append(cosmic_color)
+            palette_np = np.array(palette, dtype=np.int32)
+            ROOT.gStyle.SetPalette(len(palette), palette_np)
+
+            h_truth.SetMinimum(-0.5)
+            h_truth.SetMaximum(len(palette) - 0.5)
+            h_truth.SetContour(len(palette))
+            for i in range(len(palette)):
+                h_truth.SetContourLevel(i, i - 0.5)
             h_truth.Draw("COL")
+
+            h_cosmic = ROOT.TH1F(f"h_cosmic_plane{plane}", "", 1, 0, 1)
+            h_cosmic.SetFillColor(palette[-1])
 
             c_truth.Update()
             c_truth.SaveAs(os.path.join(output_dir, f"truth_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
@@ -183,17 +195,16 @@ class Visualiser:
 def get_parser():
     parser = argparse.ArgumentParser(description="Inference and Visualisation Script")
     parser.add_argument("--model-path", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/uresnet_plane0_9_20250321_135456_ts.pt")
-    parser.add_argument("--labels-path", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/label_mapping_plane0.npz")
     parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
     parser.add_argument("--img-size", default=512, type=int)
     parser.add_argument("--output-dir", type=str, default="./displays")
+    parser.add_argument("--target-labels", type=str, default="0,1,2,4")
     return parser
 
 def main():
     parser = get_parser()
     args = parser.parse_args()
-    label_mapping = np.load(args.labels_path)
-    foreground_labels = [int(k) for k in label_mapping.keys()]
+    foreground_labels = [int(x) for x in args.target_labels.split(',') if int(x) >= 2]
     
     dataset = ImageDataset(args, args.root_file, foreground_labels)
     vis_config = VisualisationConfig()

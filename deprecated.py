@@ -10,15 +10,15 @@ from torch.optim import Adam
 import torch.backends.cudnn as cudnn
 from tqdm import tqdm
 from sklearn.metrics import precision_score, recall_score
-import datetime
+from datetime import datetime
 
 cudnn.benchmark = True
 
 def get_parser():
     parser = argparse.ArgumentParser(description="UResNet")
-    parser.add_argument("--num-epochs", default=10, type=int)
+    parser.add_argument("--num-epochs", default=5, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--learning-rate", default=0.01, type=float)
+    parser.add_argument("--learning-rate", default=0.001, type=float)
     parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
     parser.add_argument("--img-size", default=512, type=int)
     parser.add_argument("--target-labels", type=str, default="0,1,2,4")
@@ -143,7 +143,7 @@ class ImageDataset(Dataset):
         self.plane = args.plane
         self.img_size = args.img_size
         self.target_labels = [int(x) for x in args.target_labels.split(',')]
-        self.foreground_labels = [lbl for lbl in self.target_labels if lbl >= 2]
+        self.foreground_labels = [lbl for lbl in self.target_labels if lbl >= 1]
         self.num_classes = len(self.foreground_labels) + 1  
         self.enum_to_model = {val: idx for idx, val in enumerate(self.foreground_labels, start=1)}
         event_types = self.tree["type"].array(library="np")
@@ -215,18 +215,17 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
     valid_loader = DataLoader(valid_dataset, batch_size=args.batch_size, shuffle=False)
 
-    #print("Calculating class counts...")
-    #train_stats = count_classes(train_dataset)
-    #print(f"Class counts: {train_stats}")
+    print("Calculating class counts...")
+    train_stats = count_classes(train_dataset)
+    print(f"Class counts: {train_stats}")
 
-    #print("Calculating class weights...")
-    #class_weights = get_class_weights(train_stats)
-    #print(f"Class weights: {class_weights}")
+    print("Calculating class weights...")
+    class_weights = get_class_weights(train_stats)
+    print(f"Class weights: {class_weights}")
 
-    class_weights = [0.0010253595104385963, 0.40767943871333523, 0.5912952017762262]
 
     model = UNet(in_dim=1, n_classes=full_dataset.num_classes)
-    model = nn.DataParallel(model)
+    #model = nn.DataParallel(model)
     model = model.to(device)
     loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, dtype=torch.float32, device=device))
     optim = Adam(model.parameters(), lr=args.learning_rate)
@@ -280,8 +279,9 @@ if __name__ == "__main__":
                  recalls=recalls)
         print(f"Metrics saved at {metrics_save_path}")
 
-        model_save_path = os.path.join(model_save_dir, f"unet_epoch_{epoch+1}.pt")
-        torch.save(model.state_dict(), model_save_path)
+        model_save_path = os.path.join(model_save_dir, f"unet_epoch_new_{epoch+1}.pt")
+        scripted_model = torch.jit.script(model)
+        scripted_model.save(model_save_path) 
         print(f"Model saved at {model_save_path}")
 
     print("Training complete")
