@@ -10,16 +10,17 @@ ROOT.gStyle.SetOptStat(0)
 ROOT.gStyle.SetPalette(57)  
 
 class ImageDataset:
-    def __init__(self, args, file, foreground_labels):
+    def __init__(self, args, file, foreground_labels, image_type="hit"):
         self.args = args
         self.file_path = file
-        self.tree_name = "imageanalyser/ImageTree"
+        self.tree_name = "selectionfilter/SelectionFilter"
         self.img_size = args.img_size
         self.foreground_labels = foreground_labels
         self.num_classes = len(foreground_labels)
+        self.image_type = image_type
         self.root_file = uproot.open(self.file_path, array_cache=None, num_workers=0)
         self.tree = self.root_file[self.tree_name]
-        event_types = self.tree["type"].array(library="np")
+        event_types = self.tree["event_type"].array(library="np")
         self.indices = np.where(event_types == 0)[0]
         self.num_events = len(self.indices)
 
@@ -28,17 +29,27 @@ class ImageDataset:
 
     def get_full_event(self, idx):
         actual_idx = self.indices[idx]
+        if self.image_type == "hit":
+            input_branch = "slice_hit_images"
+            truth_branch = "slice_truth_hit_images"
+        elif self.image_type == "wire": 
+            input_branch = "slice_wire_images"
+            truth_branch = "slice_truth_wire_images"
+            label_branch = "slice_label_wire_images"
+        else: 
+            raise ValueError("Invalid image_type")
         data = self.tree.arrays(
-            ["input", "truth", "run", "subrun", "event"],
+            [input_branch, truth_branch, label_branch, "run", "sub", "evt"],
             entry_start=actual_idx, entry_stop=actual_idx + 1,
             library="np"
         )
-        input_data = data["input"][0]  
-        truth_data = data["truth"][0]  
+        input_data = data[input_branch][0]
+        truth_data = data[truth_branch][0]
+        label_data = data[label_branch][0]
         run = data["run"][0]
-        subrun = data["subrun"][0]
-        event = data["event"][0]
-        return input_data, truth_data, run, subrun, event
+        subrun = data["sub"][0]
+        event = data["evt"][0]
+        return input_data, truth_data, label_data, run, subrun, event
 
 @dataclass
 class VisualisationConfig:
@@ -192,13 +203,68 @@ class Visualiser:
             c_truth.Update()
             c_truth.SaveAs(os.path.join(output_dir, f"truth_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
 
+    def visualise_labels(self, label_data, r, sr, evnum, output_dir: str):
+        os.makedirs(output_dir, exist_ok=True)
+        num_planes = 3
+        label_data_np = np.array([
+            np.fromiter(vec, dtype=np.float32, count=self.height * self.width).reshape(self.height, self.width)
+            for vec in label_data
+        ])
+        for plane in range(num_planes):
+            label_mask = label_data_np[plane]
+            plane_name = self.vis_config.PLANE_NAMES[plane]
+            title = f"Plane {plane_name} Labels (Run {r}, Subrun {sr}, Event {evnum})"
+            c_labels = ROOT.TCanvas(f"c_labels_{plane}", title, 1200, 1200)
+            c_labels.SetFillColor(ROOT.kWhite)
+            c_labels.SetLeftMargin(0.08)
+            c_labels.SetRightMargin(0.08)
+            c_labels.SetBottomMargin(0.08)
+            c_labels.SetTopMargin(0.08)
+            h_labels = ROOT.TH2F(f"h_labels_{plane}", title, self.width, 0, self.width, self.height, 0, self.height)
+            h_labels.Reset()
+            for i in range(self.width):
+                for j in range(self.height):
+                    h_labels.SetBinContent(i + 1, j + 1, label_mask[j, i])
+            h_labels.GetXaxis().SetTitle("Local Drift Time")
+            h_labels.GetYaxis().SetTitle("Local Wire Coord")
+            h_labels.GetXaxis().SetTitleOffset(1.0)
+            h_labels.GetYaxis().SetTitleOffset(1.0)
+            h_labels.GetXaxis().SetLabelSize(0.03)
+            h_labels.GetYaxis().SetLabelSize(0.03)
+            h_labels.GetXaxis().SetTitleSize(0.03)
+            h_labels.GetYaxis().SetTitleSize(0.03)
+            h_labels.GetXaxis().SetLabelColor(ROOT.kBlack)
+            h_labels.GetYaxis().SetLabelColor(ROOT.kBlack)
+            h_labels.GetXaxis().SetTitleColor(ROOT.kBlack)
+            h_labels.GetYaxis().SetTitleColor(ROOT.kBlack)
+            h_labels.GetXaxis().SetNdivisions(1)
+            h_labels.GetYaxis().SetNdivisions(1)
+            h_labels.GetXaxis().SetTickLength(0)
+            h_labels.GetYaxis().SetTickLength(0)
+            h_labels.GetXaxis().CenterTitle()
+            h_labels.GetYaxis().CenterTitle()
+            label_colors = ["#FF0000", "#00FF00", "#0000FF", "#FFFF00", "#FF00FF", "#00FFFF", "#808080", "#FFA500", "#800080", "#32CD32", "#A52A2A", "#FFC0CB", "#008080", "#000080"]
+            palette = [ROOT.TColor.GetColor(color) for color in label_colors]
+            palette_np = np.array(palette, dtype=np.int32)
+            ROOT.gStyle.SetPalette(len(palette), palette_np)
+            h_labels.SetMinimum(-0.5)
+            h_labels.SetMaximum(len(palette) - 0.5)
+            h_labels.SetContour(len(palette))
+            for i in range(len(palette)):
+                h_labels.SetContourLevel(i, i - 0.5)
+            h_labels.Draw("COL")
+            c_labels.Update()
+            c_labels.SaveAs(os.path.join(output_dir, f"labels_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
+
 def get_parser():
     parser = argparse.ArgumentParser(description="Inference and Visualisation Script")
     parser.add_argument("--model-path", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/uresnet_plane0_9_20250321_135456_ts.pt")
-    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
+    #parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
+    parser.add_argument("--root-file", type=str, default="/gluster/home/niclane/scanningforstrangeness/prod_strange_resample_fhc_run2_fhc_reco2_reco2_selectionfilter_1_new_analysis.root")
     parser.add_argument("--img-size", default=512, type=int)
     parser.add_argument("--output-dir", type=str, default="./displays")
-    parser.add_argument("--target-labels", type=str, default="0,1,2,4")
+    parser.add_argument("--target-labels", type=str, default="2,3,5")
+    parser.add_argument("--image-type", type=str, default="wire", choices=["hit", "wire"])
     return parser
 
 def main():
@@ -206,7 +272,7 @@ def main():
     args = parser.parse_args()
     foreground_labels = [int(x) for x in args.target_labels.split(',') if int(x) >= 2]
     
-    dataset = ImageDataset(args, args.root_file, foreground_labels)
+    dataset = ImageDataset(args, args.root_file, foreground_labels, image_type=args.image_type)
     vis_config = VisualisationConfig()
     visualiser = Visualiser(
         num_classes=len(foreground_labels),
@@ -217,9 +283,10 @@ def main():
     )
     
     event_idx = visualiser._random_event_index(dataset)
-    input_data, truth_data, r, sr, evnum = dataset.get_full_event(event_idx)
+    input_data, truth_data, label_data, r, sr, evnum = dataset.get_full_event(event_idx)
     visualiser.visualise_input(input_data, r, sr, evnum, args.output_dir)
     visualiser.visualise_truth(truth_data, r, sr, evnum, args.output_dir)
+    visualiser.visualise_labels(label_data, r, sr, evnum, args.output_dir)
     
     print(f"Event displays saved to {args.output_dir}")
 

@@ -3,63 +3,51 @@ import os
 import uproot
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-import matplotlib.colors as colors
-import matplotlib.patches as mpatches
+import ROOT
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List
+
+ROOT.gStyle.SetOptStat(0)
+ROOT.gStyle.SetPalette(57)
 
 class ImageDataset:
-    def __init__(self, args, file, plane, foreground_labels):
+    def __init__(self, args, file, foreground_labels):
         self.args = args
         self.file_path = file
-        self.tree_name = "imageanalyser/ImageTree"
+        self.tree_name = "imageanalyser/ImageTree"  
+        self.plane = args.plane
         self.img_size = args.img_size
-        self.plane = plane
         self.foreground_labels = foreground_labels
-        self.num_classes = len(foreground_labels)
         self.root_file = uproot.open(self.file_path, array_cache=None, num_workers=0)
         self.tree = self.root_file[self.tree_name]
         event_types = self.tree["type"].array(library="np")
-        self.indices = np.where(event_types == 0)[0]
+        self.indices = np.where(event_types == 0)[0]  
         self.num_events = len(self.indices)
-
     def __len__(self):
         return self.num_events
-
-    def __getitem__(self, idx):
+    def get_full_event(self, idx):
         actual_idx = self.indices[idx]
         data = self.tree.arrays(
             ["input", "truth", "run", "subrun", "event"],
-            entry_start=actual_idx, entry_stop=actual_idx + 1,
+            entry_start=actual_idx, 
+            entry_stop=actual_idx + 1,
             library="np"
         )
+        img = np.fromiter(data["input"][0][self.plane], dtype=np.float32).reshape(1, self.img_size, self.img_size)
+        truth = np.fromiter(data["truth"][0][self.plane], dtype=np.int64).reshape(self.img_size, self.img_size)
         run = data["run"][0]
         subrun = data["subrun"][0]
         event = data["event"][0]
-        plane_iterable = data["input"][0][self.plane]
-        plane_array = np.fromiter(plane_iterable, dtype=np.float32, count=self.img_size * self.img_size)
-        images_tensor = torch.tensor(plane_array.reshape(1, self.img_size, self.img_size), dtype=torch.float32)
-        truth_iterable = data["truth"][0][self.plane]
-        truth_array = np.fromiter(truth_iterable, dtype=np.int64, count=self.img_size * self.img_size)
-        truth_tensor = torch.tensor(truth_array.reshape(self.img_size, self.img_size), dtype=torch.long)
-        masks = torch.zeros(self.num_classes, self.img_size, self.img_size, dtype=torch.float32)
-        for i, label in enumerate(self.foreground_labels):
-            masks[i] = (truth_tensor == label).float()
-        return images_tensor, masks, run, subrun, event
+        return img, truth, run, subrun, event
 
 @dataclass
-class VisualizationConfig:
-    FIGURE_SIZE: Tuple[int, int] = (12, 12)
-    DPI: int = 600
-    GAMMA: float = 0.35
+class VisualisationConfig:
     PLANE_NAMES: List[str] = None
     OVERLAY_COLORS: Dict[int, str] = None
     LEGEND_LABELS: Dict[int, str] = None
 
 class Visualiser:
-    def __init__(self, num_classes: int, width: int, height: int, foreground_labels: List[int], vis_config: VisualizationConfig):
+    def __init__(self, num_classes: int, width: int, height: int, foreground_labels: List[int], vis_config: VisualisationConfig):
         self.num_classes = num_classes
         self.width = width
         self.height = height
@@ -68,131 +56,85 @@ class Visualiser:
         self.vis_config.PLANE_NAMES = ["U", "V", "W"]
         color_list = ["#00FFFF", "#FF00FF", "#FFFF00", "#00FF00", "#FFA500", "#FF0000"]
         self.vis_config.OVERLAY_COLORS = {label: color_list[i % len(color_list)] for i, label in enumerate(foreground_labels)}
-        self.vis_config.LEGEND_LABELS = {label: f"Label {label}" for label in foreground_labels}
+        self.vis_config.LEGEND_LABELS = {
+            1: "Noise", 2: "Muon", 3: "Charged Kaon", 4: "Kaon Short", 5: "Lambda", 6: "Charged Sigma"
+        }
 
     def _random_event_index(self, dataset) -> int:
         return np.random.randint(0, len(dataset))
-
-    def _setup_axes(self, ax: plt.Axes) -> None:
-        ax.set_xticks([0, self.width - 1])
-        ax.set_yticks([0, self.height - 1])
-        ax.tick_params(axis="both", direction="out", length=6, width=1.5, labelsize=18)
-        ax.set_xlim(0, self.width - 1)
-        ax.set_ylim(0, self.height - 1)
-        ax.set_xlabel("Local Drift Time", fontsize=20)
-        ax.set_ylabel("Local Wire Coord", fontsize=20)
-
-    def _create_figure(self, title: str) -> Tuple[plt.Figure, plt.Axes]:
-        fig, ax = plt.subplots(figsize=self.vis_config.FIGURE_SIZE, dpi=self.vis_config.DPI)
-        ax.set_title(title, fontsize=22)
-        self._setup_axes(ax)
-        return fig, ax
-
-    def _save_and_close(self, fig: plt.Figure, filename: str) -> None:
-        plt.tight_layout()
-        plt.savefig(filename)
-        plt.close(fig)
-
-    def visualise_prediction(self, dataset, model, device, output_dir: str, plane: int):
-        model.eval()
+    
+    def visualise_truth(self, truth_data, plane, r, sr, evnum, output_dir: str):
         os.makedirs(output_dir, exist_ok=True)
-        images, truth, r, sr, evnum = dataset[self._random_event_index(dataset)]
-        images = images.unsqueeze(0).to(device)  
-        with torch.no_grad():
-            pred = model(images)
-            pred_sigmoid = torch.sigmoid(pred)
-            pred_binary = (pred_sigmoid > 0.95).cpu().numpy()  
-        truth = truth.numpy()  
-        input_img = images.squeeze(0).cpu().numpy()  
+        seg_mask = truth_data.astype(np.int64)  # Shape: (img_size, img_size)
+        plane_name = self.vis_config.PLANE_NAMES[plane]  # "U", "V", or "W"
+        title = f"Plane {plane_name} Truth (Run {r}, Subrun {sr}, Event {evnum})"
 
+        c_truth = ROOT.TCanvas(f"c_truth_{plane}", title, 1200, 1200)
+        c_truth.SetFillColor(ROOT.kWhite)
+        c_truth.SetMargin(0.08, 0.08, 0.08, 0.08)
+
+        h_truth = ROOT.TH2F(f"h_truth_{plane}", title, self.width, 0, self.width, self.height, 0, self.height)
+        for i in range(self.width):
+            for j in range(self.height):
+                h_truth.SetBinContent(i + 1, j + 1, seg_mask[j, i])
+
+        h_truth.GetXaxis().SetTitle("Local Drift Time")
+        h_truth.GetYaxis().SetTitle("Local Wire Coord")
+        h_truth.GetXaxis().SetTitleOffset(1.0)
+        h_truth.GetYaxis().SetTitleOffset(1.0)
+        h_truth.GetXaxis().SetLabelSize(0.03)
+        h_truth.GetYaxis().SetLabelSize(0.03)
+        h_truth.SetMinimum(0)
+        h_truth.SetMaximum(np.max(seg_mask))
+        h_truth.Draw("COL")
+        c_truth.Update()
+        c_truth.SaveAs(os.path.join(output_dir, f"truth_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
+
+    def visualise_prediction(self, predictions, plane, r, sr, evnum, output_dir: str):
+        os.makedirs(output_dir, exist_ok=True)
+        pred_labels = torch.argmax(predictions, dim=1).squeeze(0).cpu().numpy()  # Shape: (512, 512)
         plane_name = self.vis_config.PLANE_NAMES[plane]
+        title = f"Plane {plane_name} Prediction (Run {r}, Subrun {sr}, Event {evnum})"
 
-        fig, ax = self._create_figure(f"Plane {plane_name} Input (Run {r}, Subrun {sr}, Event {evnum})")
-        ax.imshow(input_img[0], origin="lower", cmap="jet",
-                  norm=colors.PowerNorm(gamma=self.vis_config.GAMMA,
-                                        vmin=input_img.min(),
-                                        vmax=input_img.max()))
-        self._save_and_close(fig, os.path.join(output_dir, f"input_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
+        c_pred = ROOT.TCanvas(f"c_pred_{plane}", title, 1200, 1200)
+        c_pred.SetFillColor(ROOT.kWhite)
+        c_pred.SetMargin(0.08, 0.08, 0.08, 0.08)
 
-        fig, ax = self._create_figure(f"Plane {plane_name} Prediction (Run {r}, Subrun {sr}, Event {evnum})")
-        ax.imshow(input_img[0], origin="lower", cmap="jet",
-                  norm=colors.PowerNorm(gamma=self.vis_config.GAMMA,
-                                        vmin=input_img.min(),
-                                        vmax=input_img.max()))
-        for i, label in enumerate(self.foreground_labels):
-            mask = pred_binary[0, i, :, :]
-            mask = mask.astype(bool)
-            if np.any(mask):
-                overlay = np.zeros((self.height, self.width, 4))
-                color = colors.to_rgba(self.vis_config.OVERLAY_COLORS[label], 0.5)
-                overlay[mask, :] = color
-                ax.imshow(overlay, origin="lower", interpolation="nearest")
-        legend_items = [(mpatches.Circle((0, 0), radius=5, facecolor=self.vis_config.OVERLAY_COLORS[label], linewidth=0),
-                         self.vis_config.LEGEND_LABELS[label])
-                        for i, label in enumerate(self.foreground_labels) if np.any(pred_binary[0, i, :, :])]
-        if legend_items:
-            handles, labels = zip(*legend_items)
-            legend = ax.legend(handles, labels, loc='upper left', fontsize=18,
-                               frameon=False, handlelength=1.5, handletextpad=0.5,
-                               labelspacing=0.5)
-            for text in legend.get_texts():
-                text.set_color("white")
-        self._save_and_close(fig, os.path.join(output_dir, f"pred_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
+        h_pred = ROOT.TH2F(f"h_pred_{plane}", title, self.width, 0, self.width, self.height, 0, self.height)
+        for i in range(self.width):
+            for j in range(self.height):
+                h_pred.SetBinContent(i + 1, j + 1, pred_labels[j, i])
 
-        fig, ax = self._create_figure(f"Plane {plane_name} Truth (Run {r}, Subrun {sr}, Event {evnum})")
-        ax.imshow(input_img[0], origin="lower", cmap="jet",
-                  norm=colors.PowerNorm(gamma=self.vis_config.GAMMA,
-                                        vmin=input_img.min(),
-                                        vmax=input_img.max()))
-        for i, label in enumerate(self.foreground_labels):
-            mask = truth[i, :, :]
-            mask = mask.astype(bool)
-            if np.any(mask):
-                overlay = np.zeros((self.height, self.width, 4))
-                color = colors.to_rgba(self.vis_config.OVERLAY_COLORS[label], 0.5)
-                overlay[mask, :] = color
-                ax.imshow(overlay, origin="lower", interpolation="nearest")
-        legend_items = [(mpatches.Circle((0, 0), radius=5, facecolor=self.vis_config.OVERLAY_COLORS[label], linewidth=0),
-                         self.vis_config.LEGEND_LABELS[label])
-                        for i, label in enumerate(self.foreground_labels) if np.any(truth[i, :, :])]
-        if legend_items:
-            handles, labels = zip(*legend_items)
-            legend = ax.legend(handles, labels, loc='upper left', fontsize=18,
-                               frameon=False, handlelength=1.5, handletextpad=0.5,
-                               labelspacing=0.5)
-            for text in legend.get_texts():
-                text.set_color("white")
-        self._save_and_close(fig, os.path.join(output_dir, f"truth_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
+        h_pred.GetXaxis().SetTitle("Local Drift Time")
+        h_pred.GetYaxis().SetTitle("Local Wire Coord")
+        h_pred.GetXaxis().SetTitleOffset(1.0)
+        h_pred.GetYaxis().SetTitleOffset(1.0)
+        h_pred.GetXaxis().SetLabelSize(0.03)
+        h_pred.GetYaxis().SetLabelSize(0.03)
+        h_pred.SetMinimum(0)
+        h_pred.SetMaximum(np.max(pred_labels))
+        h_pred.Draw("COL")
+        c_pred.Update()
+        c_pred.SaveAs(os.path.join(output_dir, f"pred_{r}_{sr}_{evnum}_plane_{plane_name}.png"))
 
 def get_parser():
     parser = argparse.ArgumentParser(description="Inference and Visualisation Script")
-    parser.add_argument("--model-path", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/uresnet_plane0_9_20250321_135456_ts.pt",
-                        help="Path to the saved TorchScript model (e.g., uresnet_plane0_..._ts.pt)")
-    parser.add_argument("--labels-path", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/label_mapping_plane0.npz",
-                        help="Path to the saved label mapping .npz file (e.g., label_mapping_plane0.npz)")
-    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root",
-                        help="Path to the input ROOT file")
-    parser.add_argument("--img-size", default=512, type=int,
-                        help="Square image dimension in pixels")
-    parser.add_argument("--plane", type=int, choices=[0, 1, 2], required=True,
-                        help="Plane number (0, 1, 2)")
-    parser.add_argument("--output-dir", type=str, default="./event_displays",
-                        help="Directory to save event displays")
+    parser.add_argument("--model-path", type=str, default='/gluster/data/dune/niclane/checkpoints/segmentation/saved_models/unet_epoch_new_6.pt')
+    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
+    parser.add_argument("--img-size", default=512, type=int)
+    parser.add_argument("--output-dir", type=str, default="./displays")
+    parser.add_argument("--target-labels", type=str, default="0,1,2,4")
+    parser.add_argument("--plane", type=int, choices=[0, 1, 2], required=True)
     return parser
 
 def main():
     parser = get_parser()
     args = parser.parse_args()
 
-    label_mapping = np.load(args.labels_path)
-    foreground_labels = [int(k) for k in label_mapping.keys()]
+    foreground_labels = [int(x) for x in args.target_labels.split(',') if int(x) >= 2]
+    dataset = ImageDataset(args, args.root_file, foreground_labels)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = torch.jit.load(args.model_path, map_location=device)
-    model.eval()
-
-    dataset = ImageDataset(args, args.root_file, args.plane, foreground_labels)
-    vis_config = VisualizationConfig()
+    vis_config = VisualisationConfig()
     visualiser = Visualiser(
         num_classes=len(foreground_labels),
         width=args.img_size,
@@ -201,7 +143,23 @@ def main():
         vis_config=vis_config
     )
 
-    visualiser.visualise_prediction(dataset, model, device, args.output_dir, args.plane)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = torch.jit.load(args.model_path, map_location=device)
+    model.eval()
+
+    event_idx = visualiser._random_event_index(dataset)
+    input_data, truth_data, r, sr, evnum = dataset.get_full_event(event_idx)
+    input_tensor = torch.from_numpy(input_data).float().unsqueeze(0)  
+    input_tensor = input_tensor.to(device)
+
+    with torch.no_grad():
+        predictions = model(input_tensor)  
+        print(predictions)
+        class_predictions = torch.argmax(predictions, dim=1)
+        print(class_predictions)
+
+    visualiser.visualise_truth(truth_data, args.plane, r, sr, evnum, args.output_dir)
+    visualiser.visualise_prediction(predictions, args.plane, r, sr, evnum, args.output_dir)
     print(f"Event displays saved to {args.output_dir}")
 
 if __name__ == "__main__":
