@@ -142,6 +142,16 @@ This Python script implements a U-Net model for image segmentation:
 
 Key dependencies: `torch`, `uproot`, `numpy`.
 
+## HTCondor Commands
+The following HTCondor commands are used in this project:
+
+- `condor_submit`: Submits jobs to the HTCondor queue. For example:
+`condor_submit -i getenv=True` starts an interactive shell on a compute node, used for setting up or starting the VS Code tunnel.
+- `condor_submit etc/deprecated.sub` submits a job using a deprecated submit file, likely for legacy or testing purposes (not recommended for current use unless specified).
+- `condor_q`: Displays information about jobs in the HTCondor job queue. This command allows users to monitor the status of their submitted jobs, such as whether they are running, idle, or held.
+- `condor_tail`: Views the last part of a file in the sandbox of a running job. For example, `condor_tail -f -maxbytes 100000 16033` follows the output of job 16033 in real-time, displaying up to 100,000 bytes of the output file. This is useful for monitoring job progress or debugging.
+- `condor_rm`: Remove job, i.e. `condor_tail 16033`
+
 ## Requirements File
 
 The following `requirements.txt` file lists the dependencies for this project:
