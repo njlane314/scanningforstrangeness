@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import torch.backends.cudnn as cudnn
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR, StepLR, CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import time
 from datetime import datetime
 
@@ -192,13 +192,15 @@ def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.
         recall_dict[t] = recall
     return precision_dict, recall_dict
 
-def train_model(model, dataloader, optimiser, criterion, device, args):
-    scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=2, eta_min=0)
+def train_model(model, dataloader, optimiser, device, args):
+    scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=2, eta_min=1e-6)
     train_losses = []
     valid_losses = []
     learning_rates = []
     precisions = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
     recalls = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
+    cumulative_class_counts = torch.zeros(args.num_classes, device=device, dtype=torch.float32)
+    cumulative_total_pixels = 0.0
     for epoch in range(args.num_epochs):
         for batch, (images, masks, _, _, _) in enumerate(dataloader):
             split_idx = int(0.5 * images.size(0))
@@ -209,62 +211,57 @@ def train_model(model, dataloader, optimiser, criterion, device, args):
             model.train()
             train_images, train_masks = train_images.to(device), train_masks.to(device)
             valid_images, valid_masks = valid_images.to(device), valid_masks.to(device)
+            batch_size, C, H, W = train_masks.shape
+
+            batch_class_counts = train_masks.sum(dim=[0, 2, 3])  
+            cumulative_class_counts += batch_class_counts
+            cumulative_total_pixels += batch_size * H * W
+
+            pos_weight = (cumulative_total_pixels - cumulative_class_counts) / (cumulative_class_counts + 1e-6)
+            pos_weight = torch.clamp(pos_weight, min=0.001, max=1000)
+
             optimiser.zero_grad()
             train_outputs = model(train_images)
-            train_loss = criterion(train_outputs, train_masks)
+            weight_mask = pos_weight.view(1, -1, 1, 1) * train_masks
+            train_loss = F.binary_cross_entropy_with_logits(train_outputs, train_masks, pos_weight=weight_mask)
             train_losses.append(train_loss.item())
             model.eval()
             with torch.no_grad():
                 valid_outputs = model(valid_images)
-                valid_loss = criterion(valid_outputs, valid_masks).item()
+                valid_weight_mask = pos_weight.view(1, -1, 1, 1) * valid_masks
+                valid_loss = F.binary_cross_entropy_with_logits(valid_outputs, valid_masks, pos_weight=valid_weight_mask).item()
                 valid_losses.append(valid_loss)
             model.train()
             train_loss.backward()
             learning_rates.append(scheduler.get_last_lr()[0])
-            optimiser.step() 
-            scheduler.step() 
+            optimiser.step()
+            scheduler.step()
             precision_dict, recall_dict = compute_metrics(valid_outputs, valid_masks)
             for t in precision_dict:
                 precisions[t].append(precision_dict[t].cpu().numpy())
                 recalls[t].append(recall_dict[t].cpu().numpy())
             if batch % 1 == 0:
                 print(f"Epoch {epoch}, Batch {batch}: Train Loss = {train_loss.item():.4f}, Valid Loss = {valid_loss:.4f}, "
-                      f"Learning Rate = {learning_rates[-1]:.6f}, " 
+                      f"Learning Rate = {learning_rates[-1]:.6f}, "
                       f"Precision (0.3) = {precisions[0.3][-1]}, Recall (0.3) = {recalls[0.3][-1]}, "
                       f"Precision (0.4) = {precisions[0.4][-1]}, Recall (0.4) = {recalls[0.4][-1]}, "
                       f"Precision (0.5) = {precisions[0.5][-1]}, Recall (0.5) = {recalls[0.5][-1]}, "
                       f"Precision (0.6) = {precisions[0.6][-1]}, Recall (0.6) = {recalls[0.6][-1]}, "
                       f"Precision (0.7) = {precisions[0.7][-1]}, Recall (0.7) = {recalls[0.7][-1]}, "
                       f"Precision (0.8) = {precisions[0.8][-1]}, Recall (0.8) = {recalls[0.8][-1]}, "
-                      f"Precision (0.9) = {precisions[0.9][-1]}, Recall (0.9) = {recalls[0.9][-1]}, "
-                      )
+                      f"Precision (0.9) = {precisions[0.9][-1]}, Recall (0.9) = {recalls[0.9][-1]}")
             if batch % 100 == 0:
                 model.eval()
                 example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
                 traced_model = torch.jit.trace(model, example_input)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{batch}_{timestamp}_ts.pt"))
-        model.eval() 
+        model.eval()
         example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
-        traced_model = torch.jit.trace(model, example_input) 
+        traced_model = torch.jit.trace(model, example_input)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{timestamp}_ts.pt"))
     return train_losses, valid_losses, learning_rates, precisions, recalls
-
-
-class FocalLoss(nn.Module):
-    def __init__(self, gamma=2.0, reduction='mean'):
-        super(FocalLoss, self).__init__()
-        self.gamma = gamma
-        self.reduction = reduction
-
-    def forward(self, inputs, targets):
-        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-        pt = torch.exp(-BCE_loss)
-        F_loss = (1 - pt) ** self.gamma * BCE_loss
-        if self.reduction == 'mean':
-            return F_loss.mean()
-        return F_loss
 
 def main():
     args = get_parser().parse_args()
@@ -274,12 +271,10 @@ def main():
     dataset = ImageDataset(args)
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
     model = UNet(in_dim=1, n_classes=args.num_classes, depth=4, n_filters=16, drop_prob=0.1).to(device)
-    #criterion = nn.BCEWithLogitsLoss()
-    criterion = FocalLoss(gamma=8.0, reduction='mean')
     optimiser = Adam(model.parameters(), lr=args.learning_rate)
     os.makedirs(args.output_dir, exist_ok=True)
     train_losses, valid_losses, learning_rates, precisions, recalls = train_model(
-        model, dataloader, optimiser, criterion, device, args
+        model, dataloader, optimiser, device, args
     )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     np.savez(os.path.join(args.output_dir, f"loss_{timestamp}.npz"),
