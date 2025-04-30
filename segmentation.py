@@ -1,33 +1,22 @@
 import argparse
-import os
-import sys
-import uproot
-import resource
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-import torch.backends.cudnn as cudnn
-from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-import time
-from datetime import datetime
+import torch.optim as optim
+from torch.utils.data import DataLoader, random_split
+import uproot
+import numpy as np
+import os
+from torch.utils.data import Dataset
 
-cudnn.benchmark = True
-
-def print_memory_usage(msg=""):
-    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    print(f"{msg} Memory usage: {usage/1024:.2f} MB")
+torch.backends.cudnn.benchmark = True
 
 def get_parser():
-    parser = argparse.ArgumentParser(description="UResNet")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--num-epochs", default=10, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
     parser.add_argument("--learning-rate", default=0.01, type=float)
-    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nlane_prod_strange_resample_fhc_run2_fhc_reco2_reco2_trainingimage_signal_lambdamuon_1000_ana.root")
+    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nl_lambda_nohadrons_reco2_validation_2000_strangenessselectionfilter_100_new_analysis.root")
     parser.add_argument("--img-size", default=512, type=int)
-    parser.add_argument("--target-labels", type=str, default="0,1,2,4")
     parser.add_argument("--plane", type=int, choices=[0, 1, 2], required=True)
     parser.add_argument("--output-dir", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation")
     return parser
@@ -39,7 +28,7 @@ def dropout(prob):
     return nn.Dropout(prob)
 
 def reinit_layer(layer, leak=0.0, use_kaiming_normal=True):
-    if isinstance(layer, nn.Conv2d) or isinstance(layer, nn.ConvTranspose2d):
+    if isinstance(layer, (nn.Conv2d, nn.ConvTranspose2d)):
         if use_kaiming_normal:
             nn.init.kaiming_normal_(layer.weight, a=leak)
         else:
@@ -65,7 +54,7 @@ class ConvBlock(nn.Module):
         x = self.conv2(x)
         x = self.norm2(x)
         return self.relu(x + identity)
-    
+
 class TransposeConvBlock(nn.Module):
     def __init__(self, c_in, c_out, k_size=3, k_pad=1):
         super(TransposeConvBlock, self).__init__()
@@ -77,7 +66,7 @@ class TransposeConvBlock(nn.Module):
         reinit_layer(self.block[0])
     def forward(self, x):
         return self.block(x)
-    
+
 class UNet(nn.Module):
     def __init__(self, in_dim, n_classes, depth=4, n_filters=16, drop_prob=0.1, y_range=None):
         super(UNet, self).__init__()
@@ -140,159 +129,136 @@ class UNet(nn.Module):
         res = self.us_conv_1(res)
         res = self.output(res)
         return res
-    
+
 class ImageDataset(Dataset):
     def __init__(self, args):
         self.args = args
         self.root_file = uproot.open(args.root_file, array_cache=None, num_workers=0)
-        self.tree = self.root_file["imageanalyser/ImageTree"]
-        self.plane = args.plane
-        self.img_size = args.img_size
-        self.target_labels = [int(x) for x in args.target_labels.split(',')]
-        self.foreground_labels = [lbl for lbl in self.target_labels if lbl >= 2]
-        self.num_classes = len(self.foreground_labels)
-        self.enum_to_model = {val: idx for idx, val in enumerate(self.foreground_labels)}
-        event_types = self.tree["type"].array(library="np")
-        self.indices = np.where(event_types == 0)[0]
-        self.num_events = len(self.indices)
+        self.tree = self.root_file["strangenessFilter/EventSelectionFilter"]
+        self.plane = args.plane  
+        self.img_size = args.img_size  
+        in_fiducial_data = self.tree["in_fiducial"].array(library="np")
+        self.filtered_indices = np.where(in_fiducial_data == True)[0]
+        plane_letters = ['u', 'v', 'w']
+        self.calo_key = f"calo_pixels_{plane_letters[self.plane]}"
+        self.reco_key = f"reco_pixels_{plane_letters[self.plane]}"
+        self.label_key = f"label_pixels_{plane_letters[self.plane]}"
+        
     def __len__(self):
-        return self.num_events
+        return len(self.filtered_indices)
+    
     def __getitem__(self, idx):
-        actual_idx = self.indices[idx]
-        data = self.tree.arrays(
-            ["input", "truth", "run", "subrun", "event"],
-            entry_start=actual_idx, entry_stop=actual_idx + 1,
-            library="np"
-        )
-        run, subrun, event = data["run"][0], data["subrun"][0], data["event"][0]
-        img = np.fromiter(data["input"][0][self.plane], dtype=np.float32).reshape(1, self.img_size, self.img_size)  
-        img = np.log1p(img)
-        img = torch.from_numpy(img)
-        truth = np.fromiter(data["truth"][0][self.plane], dtype=np.int64).reshape(self.img_size, self.img_size)
-        masks = torch.zeros(self.num_classes, self.img_size, self.img_size, dtype=torch.float32)
-        for i, label in enumerate(self.foreground_labels):
-            masks[i] = torch.tensor(truth == label, dtype=torch.float32)
-        return img, masks, run, subrun, event
+        actual_idx = self.filtered_indices[idx]
+        data = self.tree.arrays([self.calo_key, self.reco_key, self.label_key], entry_start=actual_idx, entry_stop=actual_idx + 1, library="np")
+        
+        img_calo = data[self.calo_key][0].reshape(self.img_size, self.img_size)
+        img_reco = data[self.reco_key][0].reshape(self.img_size, self.img_size)
+        img_calo = np.log1p(img_calo)
+        img_reco = np.log1p(img_reco)
+        img = np.stack([img_calo, img_reco], axis=0)  
+        img = torch.from_numpy(img).float()
+        
+        truth = data[self.label_key][0].reshape(self.img_size, self.img_size)
+        truth = torch.from_numpy(truth).long()
+        
+        return img, truth
 
-def compute_metrics(preds, targets, thresholds=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]):
-    precision_dict = {t: [] for t in thresholds}
-    recall_dict = {t: [] for t in thresholds}
-    for t in thresholds:
-        preds_t = torch.sigmoid(preds) > t
-        targets = targets.bool()
-        tp = (preds_t & targets).float().sum(dim=(2, 3))
-        fp = (preds_t & ~targets).float().sum(dim=(2, 3))
-        fn = (~preds_t & targets).float().sum(dim=(2, 3))
-        tp = tp.sum(dim=0)
-        fp = fp.sum(dim=0)
-        fn = fn.sum(dim=0)
-        precision = tp / (tp + fp + 1e-6)
-        recall = tp / (tp + fn + 1e-6)
-        precision_dict[t] = precision
-        recall_dict[t] = recall
-    return precision_dict, recall_dict
+def calculate_class_frequencies(dataset):
+    class_counts = {}
+    for _, label in dataset:
+        unique, counts = torch.unique(label, return_counts=True)
+        for cls, count in zip(unique, counts):
+            cls = cls.item()
+            class_counts[cls] = class_counts.get(cls, 0) + count.item()
+    return class_counts
 
-def train_model(model, dataloader, optimiser, device, args):
-    scheduler = CosineAnnealingWarmRestarts(optimiser, T_0=len(dataloader), T_mult=2, eta_min=1e-6)
-    train_losses = []
-    valid_losses = []
-    learning_rates = []
-    precisions = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
-    recalls = {0.3: [], 0.4: [], 0.5: [], 0.6: [], 0.7: [], 0.8: [], 0.9: []}
-    cumulative_class_counts = torch.zeros(args.num_classes, device=device, dtype=torch.float32)
-    cumulative_total_pixels = 0.0
-    for epoch in range(args.num_epochs):
-        for batch, (images, masks, _, _, _) in enumerate(dataloader):
-            split_idx = int(0.5 * images.size(0))
-            train_images = images[:split_idx]
-            train_masks = masks[:split_idx]
-            valid_images = images[split_idx:]
-            valid_masks = masks[split_idx:]
-            model.train()
-            train_images, train_masks = train_images.to(device), train_masks.to(device)
-            valid_images, valid_masks = valid_images.to(device), valid_masks.to(device)
-            batch_size, C, H, W = train_masks.shape
-
-            batch_class_counts = train_masks.sum(dim=[0, 2, 3])  
-            cumulative_class_counts += batch_class_counts
-            cumulative_total_pixels += batch_size * H * W
-
-            pos_weight = (cumulative_total_pixels - cumulative_class_counts) / (cumulative_class_counts + 1e-6)
-            pos_weight = torch.clamp(pos_weight, min=0.001, max=1000)
-
-            optimiser.zero_grad()
-            train_outputs = model(train_images)
-            weight_mask = pos_weight.view(1, -1, 1, 1) * train_masks
-            train_loss = F.binary_cross_entropy_with_logits(train_outputs, train_masks, pos_weight=weight_mask)
-            train_losses.append(train_loss.item())
-            model.eval()
-            with torch.no_grad():
-                valid_outputs = model(valid_images)
-                valid_weight_mask = pos_weight.view(1, -1, 1, 1) * valid_masks
-                valid_loss = F.binary_cross_entropy_with_logits(valid_outputs, valid_masks, pos_weight=valid_weight_mask).item()
-                valid_losses.append(valid_loss)
-            model.train()
-            train_loss.backward()
-            learning_rates.append(scheduler.get_last_lr()[0])
-            optimiser.step()
-            scheduler.step()
-            precision_dict, recall_dict = compute_metrics(valid_outputs, valid_masks)
-            for t in precision_dict:
-                precisions[t].append(precision_dict[t].cpu().numpy())
-                recalls[t].append(recall_dict[t].cpu().numpy())
-            if batch % 1 == 0:
-                print(f"Epoch {epoch}, Batch {batch}: Train Loss = {train_loss.item():.4f}, Valid Loss = {valid_loss:.4f}, "
-                      f"Learning Rate = {learning_rates[-1]:.6f}, "
-                      f"Precision (0.3) = {precisions[0.3][-1]}, Recall (0.3) = {recalls[0.3][-1]}, "
-                      f"Precision (0.4) = {precisions[0.4][-1]}, Recall (0.4) = {recalls[0.4][-1]}, "
-                      f"Precision (0.5) = {precisions[0.5][-1]}, Recall (0.5) = {recalls[0.5][-1]}, "
-                      f"Precision (0.6) = {precisions[0.6][-1]}, Recall (0.6) = {recalls[0.6][-1]}, "
-                      f"Precision (0.7) = {precisions[0.7][-1]}, Recall (0.7) = {recalls[0.7][-1]}, "
-                      f"Precision (0.8) = {precisions[0.8][-1]}, Recall (0.8) = {recalls[0.8][-1]}, "
-                      f"Precision (0.9) = {precisions[0.9][-1]}, Recall (0.9) = {recalls[0.9][-1]}")
-            if batch % 100 == 0:
-                model.eval()
-                example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
-                traced_model = torch.jit.trace(model, example_input)
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{batch}_{timestamp}_ts.pt"))
-        model.eval()
-        example_input = torch.randn(1, 1, args.img_size, args.img_size).to(device)
-        traced_model = torch.jit.trace(model, example_input)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        traced_model.save(os.path.join(args.output_dir, f"uresnet_plane{args.plane}_{epoch}_{timestamp}_ts.pt"))
-    return train_losses, valid_losses, learning_rates, precisions, recalls
+def calculate_class_weights(class_counts):
+    total_samples = sum(class_counts.values())
+    n_classes = len(class_counts)
+    weights = {cls: total_samples / (n_classes * count) for cls, count in class_counts.items()}
+    return weights
 
 def main():
-    args = get_parser().parse_args()
-    target_labels = [int(x) for x in args.target_labels.split(',')]
-    args.num_classes = len([lbl for lbl in target_labels if lbl >= 2])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = ImageDataset(args)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, pin_memory=True, drop_last=True)
-    model = UNet(in_dim=1, n_classes=args.num_classes, depth=4, n_filters=16, drop_prob=0.1).to(device)
-    optimiser = Adam(model.parameters(), lr=args.learning_rate)
+    parser = get_parser()
+    args = parser.parse_args()
+    
     os.makedirs(args.output_dir, exist_ok=True)
-    train_losses, valid_losses, learning_rates, precisions, recalls = train_model(
-        model, dataloader, optimiser, device, args
-    )
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    np.savez(os.path.join(args.output_dir, f"loss_{timestamp}.npz"),
-             step_train_losses=train_losses,
-             step_valid_losses=valid_losses,
-             step_learning_rates=learning_rates,
-             step_precisions_03=precisions[0.3],
-             step_precisions_04=precisions[0.4],
-             step_precisions_05=precisions[0.5],
-             step_precisions_06=precisions[0.6],
-             step_precisions_07=precisions[0.7],
-             step_recalls_03=recalls[0.3],
-             step_recalls_04=recalls[0.4],
-             step_recalls_05=recalls[0.5],
-             step_recalls_06=recalls[0.6],
-             step_recalls_07=recalls[0.7])
-    label_mapping = {str(k): v for k, v in dataset.enum_to_model.items()}
-    np.savez(os.path.join(args.output_dir, f"label_mapping_plane{args.plane}.npz"), **label_mapping)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    dataset = ImageDataset(args)
+    
+    train_size = int(0.5 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+    
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
+    
+    class_counts = calculate_class_frequencies(train_dataset)
+    weights = calculate_class_weights(class_counts)
+    n_classes = max(class_counts.keys()) + 1
+    weight_tensor = torch.zeros(n_classes)
+    for cls, weight in weights.items():
+        weight_tensor[cls] = weight
+    weight_tensor = weight_tensor.to(device)
+    
+    model = UNet(in_dim=2, n_classes=n_classes, depth=4, n_filters=16, drop_prob=0.1)
+    model.to(device)
+    
+    criterion = nn.CrossEntropyLoss(weight=weight_tensor)
+    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    
+    step_train_losses = []
+    step_valid_losses = []
+    step_learning_rates = []
+    
+    for epoch in range(args.num_epochs):
+        model.train()
+        val_loader_iter = iter(val_loader)
+        
+        for batch_idx, (train_images, train_labels) in enumerate(train_loader):
+            train_images = train_images.to(device)
+            train_labels = train_labels.to(device)
+            
+            optimizer.zero_grad()
+            train_outputs = model(train_images)
+            train_loss = criterion(train_outputs, train_labels)
+            
+            try:
+                val_images, val_labels = next(val_loader_iter)
+            except StopIteration:
+                val_loader_iter = iter(val_loader)
+                val_images, val_labels = next(val_loader_iter)
+            
+            val_images = val_images.to(device)
+            val_labels = val_labels.to(device)
+            
+            model.eval()
+            with torch.no_grad():
+                val_outputs = model(val_images)
+                val_loss = criterion(val_outputs, val_labels)
+            model.train()
+            
+            step_train_losses.append(train_loss.item())
+            step_valid_losses.append(val_loss.item())
+            step_learning_rates.append(optimizer.param_groups[0]['lr'])
+            
+            train_loss.backward()
+            optimizer.step()
+            
+            print(f"Epoch [{epoch+1}/{args.num_epochs}], Step [{batch_idx+1}/{len(train_loader)}], Train Loss: {train_loss.item():.4f}, Val Loss: {val_loss.item():.4f}")
+        
+        checkpoint_path = os.path.join(args.output_dir, f"unet_epoch_{epoch+1}.pth")
+        torch.save(model.state_dict(), checkpoint_path)
+        print(f"Checkpoint saved to {checkpoint_path}")
+        
+        np.savez(os.path.join(args.output_dir, "losses.npz"),
+                 step_train_losses=step_train_losses,
+                 step_valid_losses=step_valid_losses,
+                 step_learning_rates=step_learning_rates)
+    
+    print("Training completed.")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
