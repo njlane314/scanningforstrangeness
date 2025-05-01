@@ -15,7 +15,7 @@ def get_parser():
     parser.add_argument("--num-epochs", default=10, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
     parser.add_argument("--learning-rate", default=0.01, type=float)
-    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nl_lambda_nohadrons_reco2_validation_2000_strangenessselectionfilter_100_new_analysis.root")
+    parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nl_lambda_nohadrons_reco2_validation_2000_strangenessselectionfilter_1200_new_analysis.root")
     parser.add_argument("--img-size", default=512, type=int)
     parser.add_argument("--plane", type=int, choices=[0, 1, 2], required=True)
     parser.add_argument("--output-dir", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation")
@@ -153,8 +153,6 @@ class ImageDataset(Dataset):
         
         img_calo = data[self.calo_key][0].reshape(self.img_size, self.img_size)
         img_reco = data[self.reco_key][0].reshape(self.img_size, self.img_size)
-        img_calo = np.log1p(img_calo)
-        img_reco = np.log1p(img_reco)
         img = np.stack([img_calo, img_reco], axis=0)  
         img = torch.from_numpy(img).float()
         
@@ -185,19 +183,24 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    np.random.seed(42)
+    torch.manual_seed(42)
     dataset = ImageDataset(args)
     
     train_size = int(0.5 * len(dataset))
     val_size = len(dataset) - train_size
+
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
     
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
-    
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
+
     class_counts = calculate_class_frequencies(train_dataset)
     weights = calculate_class_weights(class_counts)
     n_classes = max(class_counts.keys()) + 1
+    
     weight_tensor = torch.zeros(n_classes)
     for cls, weight in weights.items():
         weight_tensor[cls] = weight
@@ -207,7 +210,7 @@ def main():
     model.to(device)
     
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimiser = optim.Adam(model.parameters(), lr=args.learning_rate)
     
     step_train_losses = []
     step_valid_losses = []
@@ -216,12 +219,13 @@ def main():
     for epoch in range(args.num_epochs):
         model.train()
         val_loader_iter = iter(val_loader)
+        print(f"Starting epoch {epoch+1}/{args.num_epochs}")
         
         for batch_idx, (train_images, train_labels) in enumerate(train_loader):
             train_images = train_images.to(device)
             train_labels = train_labels.to(device)
-            
-            optimizer.zero_grad()
+        
+            optimiser.zero_grad()
             train_outputs = model(train_images)
             train_loss = criterion(train_outputs, train_labels)
             
@@ -242,10 +246,10 @@ def main():
             
             step_train_losses.append(train_loss.item())
             step_valid_losses.append(val_loss.item())
-            step_learning_rates.append(optimizer.param_groups[0]['lr'])
+            step_learning_rates.append(optimiser.param_groups[0]['lr'])
             
             train_loss.backward()
-            optimizer.step()
+            optimiser.step()
             
             print(f"Epoch [{epoch+1}/{args.num_epochs}], Step [{batch_idx+1}/{len(train_loader)}], Train Loss: {train_loss.item():.4f}, Val Loss: {val_loss.item():.4f}")
         
