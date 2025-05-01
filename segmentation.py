@@ -14,7 +14,7 @@ def get_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-epochs", default=10, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--learning-rate", default=0.01, type=float)
+    parser.add_argument("--learning-rate", default=0.001, type=float)
     parser.add_argument("--root-file", type=str, default="/gluster/data/dune/niclane/signal/nl_lambda_nohadrons_reco2_validation_2000_strangenessselectionfilter_1200_new_analysis.root")
     parser.add_argument("--img-size", default=512, type=int)
     parser.add_argument("--plane", type=int, choices=[0, 1, 2], required=True)
@@ -210,7 +210,7 @@ def main():
     model.to(device)
     
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
-    optimiser = optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimiser = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
     
     step_train_losses = []
     step_valid_losses = []

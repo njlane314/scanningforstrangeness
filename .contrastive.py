@@ -98,7 +98,7 @@ def main():
 
     model = ResNetContrastive()
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    optimiser = optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=1e-5)
 
     step_train_losses = []
     step_valid_losses = []
@@ -109,7 +109,7 @@ def main():
         val_loader_iter = iter(val_loader)
         for batch_idx, (train_img1, train_img2) in enumerate(train_loader):
             train_images = torch.cat([train_img1, train_img2], dim=0).to(device)
-            optimizer.zero_grad()
+            optimiser.zero_grad()
             train_embeddings = model(train_images)
             train_loss = nt_xent_loss(train_embeddings)
 
@@ -127,10 +127,10 @@ def main():
 
             step_train_losses.append(train_loss.item())
             step_valid_losses.append(val_loss.item())
-            step_learning_rates.append(optimizer.param_groups[0]['lr'])
+            step_learning_rates.append(optimiser.param_groups[0]['lr'])
 
             train_loss.backward()
-            optimizer.step()
+            optimiser.step()
 
             print(f"Epoch [{epoch+1}/{args.num_epochs}], Step [{batch_idx+1}/{len(train_loader)}], Train Loss: {train_loss.item():.4f}, Val Loss: {val_loss.item():.4f}")
 
