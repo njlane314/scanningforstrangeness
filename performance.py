@@ -5,7 +5,7 @@ import ROOT
 
 def get_parser():
     parser = argparse.ArgumentParser(description="Plotting script for segmentation training metrics using ROOT")
-    parser.add_argument("--loss-file", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/loss_20250321_144930.npz",
+    parser.add_argument("--loss-file", type=str, default="/gluster/data/dune/niclane/checkpoints/segmentation/losses_new_epochs_1_to_4.npz",
                         help="Path to the .npz file containing loss and metric results")
     parser.add_argument("--output-dir", type=str, default="./plots",
                         help="Directory to save the generated plots")
