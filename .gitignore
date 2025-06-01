@@ -44,3 +44,6 @@ checkpoints/
 out/
 
 .vscode/
+
+*.pt
+*.npz
