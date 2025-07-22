@@ -1,0 +1,436 @@
+import logging
+import sys
+import random
+import json
+import argparse
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Tuple, Any, Type, Union
+import copy
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import uproot
+from torch.utils.data import DataLoader, Dataset, random_split
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+from sklearn.metrics import confusion_matrix
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+@dataclass
+class Config:
+    ROOT_FILE_PATH: Path = Path("/gluster/data/dune/niclane/scanning/numucc_snapshot.root")
+    TTREE_NAME: str = "mc_inclusive_run1_fhc"
+    IMAGE_BRANCH: str = "raw_image_w"
+    LABEL_BRANCH: str = "analysis_channel"
+    EVENT_CATEGORIES: Dict[int, int] = field(default_factory=lambda: {
+        20: 0, 21: 1, 22: 2, 23: 3, 30: 4, 31: 5
+    })
+    IMAGE_HEIGHT: int = 512
+    IMAGE_WIDTH: int = 512
+    BATCH_SIZE: int = 8
+    GRADIENT_ACCUMULATION_STEPS: int = 1
+    VAL_SPLIT: float = 0.2
+    NUM_WORKERS: int = 0
+    ADC_THRESHOLD: float = 4.0
+    NUM_EPOCHS: int = 20
+    LEARNING_RATE: float = 0.1
+    MODEL_OUTPUT_DIR: Path = Path("trained_resnet_models")
+    METRICS_OUTPUT_DIR: Path = Path("training_resnet_metrics")
+    BEST_MODEL_PATH_FILE: Path = MODEL_OUTPUT_DIR / "best_classifier_model.txt"
+    NUM_CLASSES: int = field(init=False)
+    DROPOUT_RATE: float = 0.3
+    SE_REDUCTION: int = 16
+    CLASSIFIER_HIDDEN_DIM1: int = 512 
+    CLASSIFIER_HIDDEN_DIM2: int = 256
+
+    def __post_init__(self):
+        self.NUM_CLASSES = len(self.EVENT_CATEGORIES)
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, in_planes, planes, stride=1, dropout_rate: float = 0.0, se_reduction: int = 16):
+        super(BasicBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(planes, planes)
+        self.relu = nn.LeakyReLU(negative_slope=0.01, inplace=True)
+
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.gn2 = nn.GroupNorm(planes, planes)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != self.expansion * planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, self.expansion * planes, kernel_size=1, stride=stride, bias=False),
+                nn.GroupNorm(self.expansion * planes, self.expansion * planes) 
+            )
+
+    def forward(self, x):
+        identity = self.shortcut(x)
+
+        out = self.conv1(x)
+        out = self.gn1(out)
+        out = self.relu(out)
+
+        out = self.conv2(out)
+        out = self.gn2(out)
+
+        out += identity 
+        out = self.relu(out)
+        return out
+
+class ResNet(nn.Module):
+    def __init__(self, block, num_blocks, num_classes=6, in_channels=1,
+                dropout_rate: float = 0.0, se_reduction: int = 16,
+                classifier_hidden_dim1: int = 512, classifier_hidden_dim2: int = 256):
+        super(ResNet, self).__init__()
+        self.in_planes = 32
+        self.dropout_rate = dropout_rate
+        self.se_reduction = se_reduction
+
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, stride=1, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(32, 32)
+        self.relu = nn.LeakyReLU(negative_slope=0.01, inplace=True)
+        self.maxpool_initial = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+
+        self.layer1 = self._make_layer(block, 32, num_blocks[0], stride=1)
+        self.layer2 = self._make_layer(block, 64, num_blocks[1], stride=2)
+        self.layer3 = self._make_layer(block, 128, num_blocks[2], stride=2)
+        self.layer4 = self._make_layer(block, 256, num_blocks[3], stride=2)
+
+        self.avgpool_final = nn.AdaptiveAvgPool2d((1, 1))
+
+        final_conv_output_features = 256 * block.expansion
+        self.classifier = nn.Sequential(
+            nn.Dropout(dropout_rate), # Dropout before first Linear layer (Standard)
+            nn.Linear(final_conv_output_features, classifier_hidden_dim1),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.Dropout(dropout_rate), # Dropout after first hidden layer (Standard)
+            nn.Linear(classifier_hidden_dim1, classifier_hidden_dim2),
+            nn.LeakyReLU(negative_slope=0.01, inplace=True),
+            nn.Dropout(dropout_rate), # Dropout after second hidden layer (Standard)
+            nn.Linear(classifier_hidden_dim2, num_classes)
+        )
+
+
+    def _make_layer(self, block, planes, num_blocks, stride):
+        downsample = None
+        if stride != 1 or self.in_planes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.in_planes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.GroupNorm(planes * block.expansion, planes * block.expansion),
+            )
+
+        strides = [stride] + [1] * (num_blocks - 1)
+        layers = []
+        for s in strides:
+            layers.append(block(self.in_planes, planes, s,
+                                dropout_rate=self.dropout_rate,
+                                se_reduction=self.se_reduction))
+            self.in_planes = planes * block.expansion
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.gn1(out)
+        out = self.relu(out)
+        out = self.maxpool_initial(out)
+
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = self.layer4(out)
+
+        out = self.avgpool_final(out)
+        out = torch.flatten(out, 1)
+
+        out = self.classifier(out)
+        return out
+
+def ResNet18(num_classes=6, in_channels=1, dropout_rate: float = 0.0, se_reduction: int = 16,
+             classifier_hidden_dim1: int = 512, classifier_hidden_dim2: int = 256):
+    return ResNet(BasicBlock, [1, 1, 1, 1], num_classes=num_classes, in_channels=in_channels,
+                  dropout_rate=dropout_rate, se_reduction=se_reduction,
+                  classifier_hidden_dim1=classifier_hidden_dim1, classifier_hidden_dim2=classifier_hidden_dim2)
+
+
+class ImageClassifierDataset(Dataset):
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        try:
+            self.file = uproot.open(self.cfg.ROOT_FILE_PATH)
+        except FileNotFoundError:
+            logging.error(f"Error: ROOT file not found at '{self.cfg.ROOT_FILE_PATH}'")
+            sys.exit(1)
+
+        if cfg.TTREE_NAME not in self.file:
+            raise KeyError(f"TTree '{cfg.TTREE_NAME}' not found in '{self.cfg.ROOT_FILE_PATH}'. Available keys: {self.file.keys()}")
+        self.tree = self.file[cfg.TTREE_NAME]
+        self.all_labels_raw = self.tree[self.cfg.LABEL_BRANCH].array(library="np")
+        self.valid_indices = np.where(np.isin(self.all_labels_raw, list(self.cfg.EVENT_CATEGORIES.keys())))[0]
+
+        if len(self.valid_indices) == 0:
+            raise ValueError(f"Found 0 events matching the specified background categories in TTree '{cfg.TTREE_NAME}'.")
+
+    def __len__(self) -> int:
+        return len(self.valid_indices)
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        actual_idx = self.valid_indices[idx]
+        entry = self.tree.arrays(
+            [self.cfg.IMAGE_BRANCH, self.cfg.LABEL_BRANCH],
+            entry_start=actual_idx,
+            entry_stop=actual_idx + 1,
+            library="np"
+        )
+        image_np = entry[self.cfg.IMAGE_BRANCH][0].astype(np.float32).reshape(1, self.cfg.IMAGE_HEIGHT, self.cfg.IMAGE_WIDTH)
+        image_np[image_np < self.cfg.ADC_THRESHOLD] = 0.0
+        image_np = np.log1p(image_np)
+        image_tensor = torch.from_numpy(image_np)
+
+        label_val = entry[self.cfg.LABEL_BRANCH][0]
+        label = self.cfg.EVENT_CATEGORIES[label_val]
+        return image_tensor, torch.tensor(label, dtype=torch.long)
+
+def log_confusion_matrix(model, loader, device, class_names):
+    model.eval()
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    cm = confusion_matrix(all_labels, all_preds)
+    
+    log_message = "\n--- Confusion Matrix ---\n"
+    log_message += "Predicted ->\n"
+    header = "True ↓ |" + " ".join([f"{name:<5}" for name in class_names])
+    log_message += header + "\n"
+    log_message += "-" * len(header) + "\n"
+    for i, row in enumerate(cm):
+        log_message += f"{class_names[i]:<6} |"
+        for val in row:
+            log_message += f"{val:<5} "
+        log_message += "\n"
+    log_message += "-----------------------\n"
+    logging.info(log_message)
+
+def save_torchscript_model(model: nn.Module, path: Path, metadata: Dict[str, Any], cfg: Config):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    model_copy = copy.deepcopy(model)
+    model_copy.cpu()
+    model_copy.eval()
+
+    example_input = torch.randn(1, 1, cfg.IMAGE_HEIGHT, cfg.IMAGE_WIDTH, device='cpu')
+    
+    traced_model = torch.jit.trace(model_copy, example_input)
+
+    try:
+        torch.jit.save(traced_model, str(path))
+        logging.info(f"TorchScript model saved successfully to {path}")
+        logging.info(f"  - Method: Trace")
+        logging.info(f"  - Target Device: CPU")
+        metadata_path = path.with_suffix('.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=4)
+        logging.info(f"  - Metadata: Saved separately to {metadata_path}")
+    except Exception as e:
+        logging.error(f"An error occurred while saving the model: {e}")
+
+def train_classifier_epoch(model, loader, optimizer, criterion, device, epoch, total_epochs, accumulation_steps):
+    model.train()
+    batch_losses = []
+    num_batches = len(loader)
+    optimizer.zero_grad() 
+
+    from collections import deque
+    smoothed_loss_window = deque(maxlen=100) 
+
+    for i, (images, labels) in enumerate(loader):
+        images, labels = images.to(device), labels.to(device)
+        
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss = loss / accumulation_steps
+        
+        if torch.isnan(loss):
+            logging.error("CRITICAL: Loss is NaN. Stopping training.")
+            raise ValueError("Loss became NaN")
+            
+        loss.backward()
+        if (i + 1) % 10 == 0:
+            print_model_state(model, epoch, i)
+        
+        if (i + 1) % accumulation_steps == 0:
+            #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=100.0)
+            optimizer.step()
+            optimizer.zero_grad() 
+
+        current_loss = loss.item() * accumulation_steps 
+        batch_losses.append(current_loss)
+
+        #print(f"Epoch {epoch}/{total_epochs} | Batch {i+1}/{num_batches} | Batch Loss: {current_loss:.4f}", flush=True)
+        
+        smoothed_loss_window.append(current_loss)
+        if i % 1 == 0:
+            smoothed_loss = np.mean(smoothed_loss_window)
+            print(
+                f"Epoch {epoch}/{total_epochs} | Batch {i+1}/{num_batches} | "
+                f"Batch Loss: {current_loss:.4f} | Smoothed Loss (100 batches): {smoothed_loss:.4f}", 
+                flush=True
+            )
+
+    return batch_losses
+
+def validate_classifier(model, loader, criterion, device):
+    model.eval()
+    total_loss, correct_predictions, total_samples = 0.0, 0, 0
+    with torch.no_grad():
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total_samples += labels.size(0)
+            correct_predictions += (predicted == labels).sum().item()
+
+    avg_loss = total_loss / len(loader) if len(loader) > 0 else 0.0
+    accuracy = (100 * correct_predictions / total_samples) if total_samples > 0 else 0.0
+    return avg_loss, accuracy
+
+def print_model_state(model: nn.Module, epoch: int, batch_idx: int):
+    logging.info(f"--- Model State at Epoch {epoch}, Batch {batch_idx+1} ---")
+    for name, param in model.named_parameters():
+        if param.requires_grad and param.grad is not None:
+            # -- Weights --
+            weight_mean = param.data.mean()
+            weight_std = param.data.std()
+            weight_min = param.data.min()
+            weight_max = param.data.max()
+
+            # -- Gradients --
+            grad_mean = param.grad.data.mean()
+            grad_std = param.grad.data.std()
+            grad_min = param.grad.data.min()
+            grad_max = param.grad.data.max()
+
+            logging.info(f"Layer: {name}")
+            logging.info(
+                f"  Weights | Mean: {weight_mean:+.4e}, Std: {weight_std:.4e}, "
+                f"Min: {weight_min:+.4e}, Max: {weight_max:+.4e}"
+            )
+            logging.info(
+                f"  Grads   | Mean: {grad_mean:+.4e}, Std: {grad_std:.4e}, "
+                f"Min: {grad_min:+.4e}, Max: {grad_max:+.4e}"
+            )
+    logging.info("--- End of Model State ---")
+
+def train_classifier(cfg: Config, device: torch.device):
+    logging.info("--- Training ResNet Classifier for Background Events ---")
+    dataset = ImageClassifierDataset(cfg)
+    if len(dataset) < 20:
+        raise ValueError("Dataset too small for a meaningful train/validation split.")
+    val_size = int(cfg.VAL_SPLIT * len(dataset))
+    train_size = len(dataset) - val_size
+    train_dataset_subset, val_dataset_subset = random_split(dataset, [train_size, val_size])
+
+    train_loader = DataLoader(train_dataset_subset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=cfg.NUM_WORKERS)
+    val_loader = DataLoader(val_dataset_subset, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=cfg.NUM_WORKERS)
+
+    logging.info("Calculating inverse frequency class weights...")
+    all_valid_labels = dataset.all_labels_raw[dataset.valid_indices]
+    mapped_valid_labels = torch.tensor([cfg.EVENT_CATEGORIES[label] for label in all_valid_labels])
+    train_labels = mapped_valid_labels[train_dataset_subset.indices]
+    class_counts = torch.bincount(train_labels, minlength=cfg.NUM_CLASSES)
+    class_weights = 1.0 / (class_counts.float() + 1e-6)
+    class_weights = torch.sqrt(class_weights)
+    class_weights = class_weights / class_weights.sum() * cfg.NUM_CLASSES
+    class_weights = class_weights.to(device)
+    logging.info(f"Calculated Class Weights: {class_weights.cpu().numpy()}")
+
+    model = ResNet18(num_classes=cfg.NUM_CLASSES, in_channels=1, 
+                     dropout_rate=cfg.DROPOUT_RATE, se_reduction=cfg.SE_REDUCTION,
+                     classifier_hidden_dim1=cfg.CLASSIFIER_HIDDEN_DIM1,
+                     classifier_hidden_dim2=cfg.CLASSIFIER_HIDDEN_DIM2).to(device)
+    criterion = nn.CrossEntropyLoss()#weight=class_weights)
+    optimizer = optim.Adam(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=5, verbose=True)
+    
+    all_batch_losses, epoch_val_losses, epoch_val_accs, epoch_lrs = [], [], [], []
+    best_val_acc = -1.0
+
+    for epoch in range(cfg.NUM_EPOCHS):
+        epoch_num = epoch + 1
+        current_lr = optimizer.param_groups[0]['lr']
+        epoch_lrs.append(current_lr)
+        logging.info(f"--- Starting Epoch {epoch_num}/{cfg.NUM_EPOCHS} with Learning Rate: {current_lr} ---")
+
+        batch_losses = train_classifier_epoch(model, train_loader, optimizer, criterion, device, epoch_num, cfg.NUM_EPOCHS, cfg.GRADIENT_ACCUMULATION_STEPS)
+        all_batch_losses.extend(batch_losses)
+        
+        logging.info("Validating...")
+        val_loss, val_acc = validate_classifier(model, val_loader, criterion, device)
+        scheduler.step(val_loss)
+        epoch_val_losses.append(val_loss)
+        epoch_val_accs.append(val_acc)
+
+        logging.info(f"--- End of Epoch {epoch_num} | Validation Loss: {val_loss:.4f} | Validation Accuracy: {val_acc:.2f}% ---")
+        sys.stdout.flush()
+
+        model_path = cfg.MODEL_OUTPUT_DIR / f"resnet_classifier_epoch_{epoch_num}.pt"
+        save_torchscript_model(model, model_path, {'class_definitions': cfg.EVENT_CATEGORIES}, cfg)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_model_path = model_path
+            with open(cfg.BEST_MODEL_PATH_FILE, 'w') as f:
+                f.write(str(best_model_path))
+            logging.info(f"New best model path saved: {best_model_path}")
+
+    cfg.METRICS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    metrics_path = cfg.METRICS_OUTPUT_DIR / "resnet_classifier_metrics.npz"
+    np.savez(metrics_path,
+             batch_losses=np.array(all_batch_losses),
+             epoch_validation_losses=np.array(epoch_val_losses),
+             epoch_validation_accuracies=np.array(epoch_val_accs),
+             epoch_learning_rates=np.array(epoch_lrs))
+    logging.info(f"Classifier training metrics saved to {metrics_path}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Train a ResNet classifier for background events.")
+    args = parser.parse_args()
+
+    cfg = Config()
+    cfg.MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f"Using device: {device}")
+    
+    train_classifier(cfg, device)
+    
+    logging.info("Pipeline finished successfully!")
+
+if __name__ == "__main__":
+    main()

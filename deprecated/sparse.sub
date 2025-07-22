@@ -1,0 +1,17 @@
+universe                = vanilla
+executable              = bin/sparse.sh
+arguments               = "/gluster/home/niclane/scanningforstrangeness/filtered_numu_cc_events.root" "/gluster/home/niclane/scripts/trained_models"
+request_memory          = 16G
+request_cpus            = 8
+request_gpus            = 1
+request_disk            = 40G
+initialdir              = /gluster/home/niclane/scripts
+output                  = out/sparse/sparse-$(Cluster).$(Process).out
+error                   = out/sparse/sparse-$(Cluster).$(Process).err
+log                     = out/sparse/sparse-$(Cluster).$(Process).log
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT_OR_EVICT
+transfer_input_files    = /gluster/home/niclane/scanningforstrangeness/train_sparse.py
+transfer_output_files   = model_output
++WantIOProxy            = True
+queue 1

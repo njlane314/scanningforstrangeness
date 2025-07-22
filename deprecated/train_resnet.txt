@@ -1,0 +1,443 @@
+import logging
+import sys
+import random
+import json
+import argparse
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Tuple, Any, Type, Union
+import copy
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import uproot
+from torch.utils.data import DataLoader, Dataset, random_split, Subset, TensorDataset
+
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+# scp nlane@uboonegpvm03.fnal.gov:/exp/uboone/app/users/nlane/analysis/rarexsec_analysis/build/numucc_snapshot.root /gluster/data/dune/niclane/scanning/
+# scp trained_resnet_models/resnet_classifier_epoch_2.pt nlane@uboonegpvm03.fnal.gov:/exp/uboone/app/users/nlane/production/strangeness_mcc9/srcs/ubana/ubana/searchingforstrangeness/.
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+@dataclass
+class Config:
+    ROOT_FILE_PATH: Path = Path("/gluster/data/dune/niclane/scanning/numucc_snapshot.root")
+    TTREE_NAME: str = "mc_inclusive_run1_fhc"
+    IMAGE_BRANCH: str = "raw_image_w"
+    LABEL_BRANCH: str = "analysis_channel"
+    RESNET_VERSION: str = "resnet50"
+    EVENT_CATEGORIES: Dict[int, int] = field(default_factory=lambda: {
+        20: 0, 21: 1, 22: 2, 23: 3, 30: 4, 31: 5
+    })
+    IMAGE_HEIGHT: int = 512
+    IMAGE_WIDTH: int = 512
+    BATCH_SIZE: int = 16
+    GRADIENT_ACCUMULATION_STEPS: int = 4
+    VAL_SPLIT: float = 0.2
+    NUM_WORKERS: int = 0
+    ADC_THRESHOLD: float = 4.0
+    NUM_EPOCHS: int = 20
+    LEARNING_RATE: float = 1e-3
+    MODEL_OUTPUT_DIR: Path = Path("trained_resnet_models")
+    METRICS_OUTPUT_DIR: Path = Path("training_resnet_metrics")
+    BEST_MODEL_PATH_FILE: Path = MODEL_OUTPUT_DIR / "best_classifier_model.txt"
+    NUM_CLASSES: int = field(init=False)
+
+    def __post_init__(self):
+        self.NUM_CLASSES = len(self.EVENT_CATEGORIES)
+
+
+class ImageClassifierDataset(Dataset):
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+        try:
+            self.file = uproot.open(self.cfg.ROOT_FILE_PATH)
+        except FileNotFoundError:
+            logging.error(f"Error: ROOT file not found at '{self.cfg.ROOT_FILE_PATH}'")
+            sys.exit(1)
+
+        if cfg.TTREE_NAME not in self.file:
+            raise KeyError(f"TTree '{cfg.TTREE_NAME}' not found in '{self.cfg.ROOT_FILE_PATH}'. Available keys: {self.file.keys()}")
+        self.tree = self.file[cfg.TTREE_NAME]
+        self.all_labels_raw = self.tree[self.cfg.LABEL_BRANCH].array(library="np")
+        self.valid_indices = np.where(np.isin(self.all_labels_raw, list(self.cfg.EVENT_CATEGORIES.keys())))[0]
+
+        if len(self.valid_indices) == 0:
+            raise ValueError(f"Found 0 events matching the specified background categories in TTree '{cfg.TTREE_NAME}'.")
+
+    def __len__(self) -> int:
+        return len(self.valid_indices)
+    
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        actual_idx = self.valid_indices[idx]
+        entry = self.tree.arrays(
+            [self.cfg.IMAGE_BRANCH, self.cfg.LABEL_BRANCH],
+            entry_start=actual_idx,
+            entry_stop=actual_idx + 1,
+            library="np"
+        )
+        image_np = entry[self.cfg.IMAGE_BRANCH][0].astype(np.float32).reshape(1, self.cfg.IMAGE_HEIGHT, self.cfg.IMAGE_WIDTH)
+        image_np[image_np < self.cfg.ADC_THRESHOLD] = 0.0
+        image_np = np.log1p(image_np)
+        image_tensor = torch.from_numpy(image_np)
+
+        label_val = entry[self.cfg.LABEL_BRANCH][0]
+        label = self.cfg.EVENT_CATEGORIES[label_val]
+        return image_tensor, torch.tensor(label, dtype=torch.long)
+
+class FixedNormalization(nn.Module):
+    def __init__(self, mean: float, std: float):
+        super(FixedNormalization, self).__init__()
+        self.register_buffer('mean', torch.tensor(mean))
+        self.register_buffer('std', torch.tensor(std))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - self.mean) / (self.std + 1e-6)
+    
+class SELayer(nn.Module):
+    def __init__(self, channel, reduction=16):
+        super(SELayer, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Sequential(
+            nn.Linear(channel, channel // reduction, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(channel // reduction, channel, bias=False),
+            nn.Sigmoid()  
+        )
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1, 1)
+        return x * y.expand_as(x)
+
+class BasicBlock(nn.Module):
+    expansion = 1
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != self.expansion * out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, self.expansion * out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * out_channels)
+            )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += identity
+        out = self.relu(out)
+        return out
+
+class Bottleneck(nn.Module):
+    expansion = 4
+    def __init__(self, in_channels: int, out_channels: int, stride: int = 1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(out_channels)
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(out_channels)
+        self.conv3 = nn.Conv2d(out_channels, self.expansion * out_channels, kernel_size=1, bias=False)
+        self.bn3 = nn.BatchNorm2d(self.expansion * out_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.se = SELayer(self.expansion * out_channels)
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_channels != self.expansion * out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, self.expansion * out_channels, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(self.expansion * out_channels)
+            )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = self.shortcut(x)
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.relu(self.bn2(self.conv2(out)))
+        out = self.bn3(self.conv3(out))
+        out = self.se(out)
+        out += identity
+        out = self.relu(out)
+        return out
+
+class ResNet(nn.Module):
+    def __init__(self, block: Type[Union[BasicBlock, Bottleneck]], layers: List[int], num_classes: int, in_channels: int = 1, mean: float = 0.0, std: float = 1.0):
+        super().__init__()
+        self.normalization = FixedNormalization(mean, std)
+        self.in_channels = 64
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0], stride=1)
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.avgpool = nn.AdaptiveMaxPool2d((1, 1))
+        feature_vector_size = 512 * block.expansion
+        self.classifier_mlp = nn.Sequential(
+            nn.Linear(feature_vector_size, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5),
+            nn.Linear(256, num_classes)
+        )
+
+    def _make_layer(self, block: Type[Union[BasicBlock, Bottleneck]], out_channels: int, num_blocks: int, stride: int) -> nn.Sequential:
+        strides = [stride] + [1] * (num_blocks - 1)
+        layer_blocks = []
+        for s in strides:
+            layer_blocks.append(block(self.in_channels, out_channels, s))
+            self.in_channels = out_channels * block.expansion
+        return nn.Sequential(*layer_blocks)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.normalization(x)
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.classifier_mlp(x)
+        return x
+
+def get_resnet_model(name: str, **kwargs) -> ResNet:
+    models = {
+        "resnet18": (BasicBlock, [2, 2, 2, 2]), "resnet34": (BasicBlock, [3, 4, 6, 3]),
+        "resnet50": (Bottleneck, [3, 4, 6, 3]), "resnet101": (Bottleneck, [3, 4, 23, 3]),
+        "resnet150": (Bottleneck, [3, 8, 36, 3]),
+    }
+    if name not in models:
+        raise ValueError(f"ResNet version '{name}' not recognized. Available: {list(models.keys())}")
+    block, layers = models[name]
+    return ResNet(block, layers, **kwargs)
+
+def save_torchscript_model(model: nn.Module, path: Path, metadata: Dict[str, Any], cfg: Config): # Added cfg
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    model_copy = copy.deepcopy(model)
+    model_copy.cpu()
+    model_copy.eval()
+
+    example_input = torch.randn(1, 1, cfg.IMAGE_HEIGHT, cfg.IMAGE_WIDTH, device='cpu')
+    
+    traced_model = torch.jit.trace(model_copy, example_input)
+
+    try:
+        torch.jit.save(traced_model, str(path))
+        logging.info(f"TorchScript model saved successfully to {path}")
+        logging.info(f"  - Method: Trace")
+        logging.info(f"  - Target Device: CPU")
+        metadata_path = path.with_suffix('.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=4)
+        logging.info(f"  - Metadata: Saved separately to {metadata_path}")
+
+    except Exception as e:
+        logging.error(f"An error occurred while saving the model: {e}")
+
+def calculate_statistics(data_subset: Subset, sample_size: int = 1000):
+    num_samples_to_use = min(sample_size, len(data_subset))
+    
+    random_indices = np.random.choice(len(data_subset), size=num_samples_to_use, replace=False)
+    sampler = torch.utils.data.Subset(data_subset.dataset, [data_subset.indices[i] for i in random_indices])
+    
+    loader = DataLoader(sampler, batch_size=64, num_workers=0, shuffle=False)
+    
+    n_pixels = 0
+    sum_ = torch.zeros(1)
+    sum_sq = torch.zeros(1)
+
+    logging.info(f"Calculating stats on subsample of images...")
+    for images, _ in loader:
+        sum_ += torch.sum(images)
+        sum_sq += torch.sum(images ** 2)
+        n_pixels += images.nelement()
+
+    mean = sum_ / n_pixels
+    std = torch.sqrt((sum_sq / n_pixels) - (mean ** 2))
+    
+    return mean.item(), std.item()
+
+def train_classifier_epoch(model, loader, optimizer, criterion, device, epoch, total_epochs, accumulation_steps):
+    model.train()
+    batch_losses = []
+    num_batches = len(loader)
+    optimizer.zero_grad() 
+
+    for i, (images, labels) in enumerate(loader):
+        images, labels = images.to(device), labels.to(device)
+        
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss = loss / accumulation_steps
+        
+        if torch.isnan(loss):
+            logging.error("CRITICAL: Loss is NaN. Stopping training.")
+            raise ValueError("Loss became NaN")
+            
+        loss.backward()
+        
+        if (i + 1) % accumulation_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            
+            optimizer.step()
+            optimizer.zero_grad() 
+
+        current_loss = loss.item() * accumulation_steps 
+        batch_losses.append(current_loss)
+
+        print(f"Epoch {epoch}/{total_epochs} | Batch {i+1}/{num_batches} | Batch Loss: {current_loss:.4f}", flush=True)
+        
+    return batch_losses
+
+def validate_classifier(model, loader, criterion, device):
+    model.eval()
+    total_loss, correct_predictions, total_samples = 0.0, 0, 0
+    with torch.no_grad():
+        for images, labels in loader:
+            images, labels = images.to(device), labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total_samples += labels.size(0)
+            correct_predictions += (predicted == labels).sum().item()
+
+    avg_loss = total_loss / len(loader) if len(loader) > 0 else 0.0
+    accuracy = (100 * correct_predictions / total_samples) if total_samples > 0 else 0.0
+    return avg_loss, accuracy
+
+def train_classifier(cfg: Config, device: torch.device, smoke_test: bool = False):
+    logging.info("--- Training ResNet Classifier for Background Events ---")
+    dataset = ImageClassifierDataset(cfg)
+    if len(dataset) < 20:
+        raise ValueError("Dataset too small for a meaningful train/validation split.")
+    val_size = int(cfg.VAL_SPLIT * len(dataset))
+    train_size = len(dataset) - val_size
+    train_dataset_subset, val_dataset_subset = random_split(dataset, [train_size, val_size])
+
+    logging.info("Calculating normalisation statistics from training set...")
+    mean, std = calculate_statistics(train_dataset_subset)
+    logging.info(f"Calculated Mean: {mean:.4f}, Std: {std:.4f}. These will be fixed in the model.")
+
+    if smoke_test:
+        logging.info("--- Running in OVERFIT TEST mode: training on a single batch repeatedly. ---")
+        logging.info(f"Will run for {cfg.NUM_EPOCHS} epochs to check for overfitting.")
+        
+        temp_loader = DataLoader(train_dataset_subset, batch_size=cfg.BATCH_SIZE, shuffle=True)
+        single_batch_images, single_batch_labels = next(iter(temp_loader))
+        
+        overfit_dataset = TensorDataset(single_batch_images, single_batch_labels)
+        train_loader = DataLoader(overfit_dataset, batch_size=cfg.BATCH_SIZE)
+        val_loader = DataLoader(overfit_dataset, batch_size=cfg.BATCH_SIZE)
+
+        logging.info(f"Created a static dataset of size {len(single_batch_images)} to check for overfitting.")
+    else:
+        train_loader = DataLoader(train_dataset_subset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=cfg.NUM_WORKERS)
+        val_loader = DataLoader(val_dataset_subset, batch_size=cfg.BATCH_SIZE, shuffle=False, num_workers=cfg.NUM_WORKERS)
+
+    logging.info("Calculating inverse frequency class weights...")
+    all_valid_labels = dataset.all_labels_raw[dataset.valid_indices]
+    mapped_valid_labels = torch.tensor([cfg.EVENT_CATEGORIES[label] for label in all_valid_labels])
+    train_labels = mapped_valid_labels[train_dataset_subset.indices]
+    class_counts = torch.bincount(train_labels, minlength=cfg.NUM_CLASSES)
+    class_weights = 1.0 / (class_counts.float() + 1e-6)
+    class_weights = class_weights / class_weights.sum() * cfg.NUM_CLASSES
+    class_weights = class_weights.to(device)
+    logging.info(f"Calculated Class Weights: {class_weights.cpu().numpy()}")
+
+    model = get_resnet_model(
+        name=cfg.RESNET_VERSION, 
+        num_classes=cfg.NUM_CLASSES, 
+        in_channels=1,
+        mean=mean,
+        std=std
+    ).to(device)
+
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = optim.Adam(model.parameters(), lr=cfg.LEARNING_RATE, weight_decay=1e-4)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=5, verbose=True)
+    
+    all_batch_losses, epoch_val_losses, epoch_val_accs, epoch_lrs = [], [], [], []
+    best_val_acc = -1.0
+
+    for epoch in range(cfg.NUM_EPOCHS):
+        epoch_num = epoch + 1
+        current_lr = optimizer.param_groups[0]['lr']
+        epoch_lrs.append(current_lr)
+        logging.info(f"--- Starting Epoch {epoch_num}/{cfg.NUM_EPOCHS} with Learning Rate: {current_lr} ---")
+
+        batch_losses = train_classifier_epoch(model, train_loader, optimizer, criterion, device, epoch_num, cfg.NUM_EPOCHS, cfg.GRADIENT_ACCUMULATION_STEPS)
+        all_batch_losses.extend(batch_losses)
+        
+        logging.info("Validating...")
+        val_loss, val_acc = validate_classifier(model, val_loader, criterion, device)
+        scheduler.step(val_loss)
+        epoch_val_losses.append(val_loss)
+        epoch_val_accs.append(val_acc)
+
+        if smoke_test:
+            logging.info(f"--- End of Overfit Epoch {epoch_num} | Loss on Batch: {val_loss:.4f} | Accuracy on Batch: {val_acc:.2f}% ---")
+        else:
+            logging.info(f"--- End of Epoch {epoch_num} | Validation Loss: {val_loss:.4f} | Validation Accuracy: {val_acc:.2f}% ---")
+        sys.stdout.flush()
+
+        model_path = cfg.MODEL_OUTPUT_DIR / f"resnet_classifier_epoch_{epoch_num}.pt"
+        save_torchscript_model(model, model_path, {'class_definitions': cfg.EVENT_CATEGORIES, 'mean': mean, 'std': std}, cfg)
+
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            best_model_path = model_path
+            with open(cfg.BEST_MODEL_PATH_FILE, 'w') as f:
+                f.write(str(best_model_path))
+            logging.info(f"New best model path saved: {best_model_path}")
+
+    cfg.METRICS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    metrics_path = cfg.METRICS_OUTPUT_DIR / "resnet_classifier_metrics.npz"
+    np.savez(metrics_path,
+             batch_losses=np.array(all_batch_losses),
+             epoch_validation_losses=np.array(epoch_val_losses),
+             epoch_validation_accuracies=np.array(epoch_val_accs),
+             epoch_learning_rates=np.array(epoch_lrs))
+    logging.info(f"Classifier training metrics saved to {metrics_path}")
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Train a ResNet classifier for background events.",
+        epilog="Use the --smoke-test flag to run in overfitting test mode, where the model trains on a single batch repeatedly."
+    )
+    parser.add_argument("--smoke-test", action="store_true", help="Run in single-batch overfitting mode to check model sanity.")
+    args = parser.parse_args()
+
+    cfg = Config()
+    cfg.MODEL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logging.info(f"Using device: {device}")
+    
+    train_classifier(cfg, device, smoke_test=args.smoke_test)
+    
+    logging.info("Pipeline finished successfully!")
+
+if __name__ == "__main__":
+    main()

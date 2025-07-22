@@ -47,3 +47,9 @@ out/
 
 *.pt
 *.npz
+
+*.png
+*.pdf
+
+*.pth
+.github/

@@ -1,6 +1,6 @@
 #!/bin/bash
 cd /gluster/home/niclane/scanningforstrangeness
 source /gluster/data/dune/niclane/miniforge/etc/profile.d/conda.sh 
-conda activate pythondl
+conda activate contrastive
 
-/gluster/home/niclane/miniforge3/envs/pythondl/bin/python -u segmentation.py --plane 0
+/gluster/data/dune/niclane/miniforge/envs/contrastive/bin/python -u contrastive.py
